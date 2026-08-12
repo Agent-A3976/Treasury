@@ -387,15 +387,27 @@ function jsonp_(url){
     script.onerror = ()=>{ if(!done){ cleanup(); reject(new Error("โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ (JSONP)")); } };
     script.src = url + (url.includes("?") ? "&" : "?") + "callback=" + cbName;
     document.body.appendChild(script);
-    setTimeout(()=>{ if(!done){ cleanup(); reject(new Error("หมดเวลารอข้อมูลจาก Google Sheet (timeout)")); } }, 20000);
+    setTimeout(()=>{ if(!done){ cleanup(); reject(new Error("หมดเวลารอข้อมูลจาก Google Sheet (timeout)")); } }, 40000);
   });
 }
 
 async function apiGet(action, extraParams){
   const params = new URLSearchParams({ action, ...(extraParams||{}) });
-  const json = await jsonp_(`${API_URL}?${params.toString()}`);
-  if(!json.ok) throw new Error(json.error || "API error");
-  return json.data;
+  const url = `${API_URL}?${params.toString()}`;
+  let lastErr;
+  // ปัญหาชั่วคราว (Apps Script ตอบช้า/hiccup ชั่วครู่) มักหายไปถ้าลองใหม่ — ลองสูงสุด 3 ครั้งก่อนยอมแพ้
+  for(let attempt=1; attempt<=3; attempt++){
+    try{
+      const json = await jsonp_(url);
+      if(!json.ok) throw new Error(json.error || "API error");
+      return json.data;
+    }catch(e){
+      lastErr = e;
+      console.warn(`apiGet(${action}) ครั้งที่ ${attempt} ไม่สำเร็จ:`, e.message);
+      if(attempt<3) await new Promise(r=>setTimeout(r, 800*attempt));
+    }
+  }
+  throw lastErr;
 }
 
 async function apiPost(action, payload){
