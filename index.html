@@ -252,6 +252,7 @@
           <option value="รอครบงวด">รอครบงวด</option>
           <option value="ซ้ำ (ยืนยันแล้ว)">ซ้ำ (ยืนยันแล้ว)</option>
           <option value="ซ้ำ">ซ้ำ</option>
+          <option value="ซ้ำในรายการตรวจ (ยืนยันแล้ว)">ซ้ำในรายการตรวจ (ยืนยันแล้ว)</option>
           <option value="ซ้ำในรายการตรวจ">ซ้ำในรายการตรวจ</option>
           <option value="ข้ามงวด">ข้ามงวด</option>
           <option value="จำนวนเงินไม่ตรง">จำนวนเงินไม่ตรง</option>
@@ -551,7 +552,10 @@ function computeStatus(row, index, allRows, dateOverride){
 
   const priorRows = allRows.slice(0, index);
   const dupInSheet = priorRows.some(r => (r.code||'').trim()===A && (r.period||'').trim()===B && parseFloat(r.amount)===C);
-  if(dupInSheet) return {status:'ซ้ำในรายการตรวจ', note:''};
+  if(dupInSheet){
+    if(row.confirmDup) return {status:'ซ้ำในรายการตรวจ (ยืนยันแล้ว)', note:'พนักงานยืนยันแล้วว่าลูกค้าจ่ายจริงมากกว่า 1 ครั้งในชุดนี้'};
+    return {status:'ซ้ำในรายการตรวจ', note:''};
+  }
 
   const dupWR = WR_DATA.some(r=>String(r[0])===A && String(r[1])===B && r[2]===C && sameDate(r));
   const dupAR = AR_DATA.some(r=>String(r[0])===A && String(r[1])===B && r[2]===C && sameDate(r));
@@ -646,7 +650,7 @@ async function commitToWR(){
   const day = d, monthName = THAI_MONTHS[m-1], yearBE = y+543;
 
   const results = checkRows.map((row,i)=>computeStatus(row,i,checkRows));
-  const okSet = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)'];
+  const okSet = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
   const committingBatch = [];
   const committedIdx = new Set();
 
@@ -793,7 +797,7 @@ async function importWRPaste(){
 let checkRows = [];
 
 function pillClass(status){
-  const green = ['ถูก','ลูกค้าใหม่','ซ้ำ (ยืนยันแล้ว)'];
+  const green = ['ถูก','ลูกค้าใหม่','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
   const gray = ['ค่าธรรมเนียมเพิ่มเติม','สะสมเพิ่มเติม'];
   const amber = ['รอครบงวด','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง'];
   const red = ['ซ้ำ','ซ้ำในรายการตรวจ','งวดนี้จ่ายครบไปแล้ว','ลูกค้าปิดสัญญาแล้ว','ไม่พบข้อมูลลูกค้า'];
@@ -888,9 +892,9 @@ function renderCheckTable(){
   </tr></thead><tbody>`;
   sorted.forEach(({row, i, r})=>{
     let statusCell = r.status ? `<span class="pill ${pillClass(r.status)}">${r.status}</span>` : '';
-    if(r.status === 'ซ้ำ'){
-      statusCell += ` <button class="confirm-dup" data-i="${i}" title="ยืนยันว่าลูกค้าจ่ายจริงมากกว่า 1 ครั้งในวันเดียวกัน">ยืนยันไม่ซ้ำ</button>`;
-    } else if(r.status === 'ซ้ำ (ยืนยันแล้ว)'){
+    if(r.status === 'ซ้ำ' || r.status === 'ซ้ำในรายการตรวจ'){
+      statusCell += ` <button class="confirm-dup" data-i="${i}" title="ยืนยันว่าลูกค้าจ่ายจริงมากกว่า 1 ครั้ง">ยืนยันไม่ซ้ำ</button>`;
+    } else if(r.status === 'ซ้ำ (ยืนยันแล้ว)' || r.status === 'ซ้ำในรายการตรวจ (ยืนยันแล้ว)'){
       statusCell += ` <button class="undo-confirm-dup" data-i="${i}" title="ยกเลิกการยืนยัน">ยกเลิก</button>`;
     }
     if(r.note) statusCell += `<div class="note">${r.note}</div>`;
@@ -953,7 +957,7 @@ function addRow(){
 }
 
 function renderDashboard(){
-  const okList = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)'];
+  const okList = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
   const issueList = ['ซ้ำ','ซ้ำในรายการตรวจ','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง','ไม่พบข้อมูลลูกค้า','ลูกค้าปิดสัญญาแล้ว'];
   const results = checkRows.map((row,i)=>computeStatus(row,i,checkRows));
   const counts = {};
