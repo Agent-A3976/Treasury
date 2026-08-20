@@ -26,6 +26,15 @@
   *{box-sizing:border-box;}
   body{margin:0;background:var(--bg);color:var(--ink);}
   .wrap{max-width:1100px;margin:0 auto;padding:24px 20px 60px;}
+  .auth-overlay{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;}
+  .auth-box{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px;width:100%;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.06);}
+  .auth-tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--line);}
+  .auth-tab{flex:1;background:none;border:none;padding:10px 0;font-size:13.5px;font-weight:600;color:var(--ink-3);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .auth-tab.active{color:var(--teal);border-bottom-color:var(--teal);}
+  #login-form label, #register-form label{display:block;font-size:12px;color:var(--ink-2);margin:12px 0 4px;}
+  #login-form input, #register-form input{width:100%;padding:9px 11px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;}
+  #login-form input:focus, #register-form input:focus{border-color:var(--teal);outline:none;box-shadow:0 0 0 3px var(--teal-l);}
+  .auth-error{color:var(--red);font-size:12.5px;margin:10px 0 0;min-height:16px;}
   header.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
   header.top h1{font-size:19px;font-weight:600;margin:0;color:var(--navy);}
   header.top p{margin:2px 0 0;font-size:13px;color:var(--ink-2);}
@@ -167,17 +176,57 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+
+<div class="auth-overlay" id="auth-overlay">
+  <div class="auth-box">
+    <h1 style="font-size:20px;margin-bottom:4px;">ระบบตรวจสอบการชำระเงิน</h1>
+    <p class="hint" style="margin:0 0 20px;">เข้าสู่ระบบเพื่อใช้งาน — ทุกการกระทำจะถูกบันทึกไว้ในระบบ</p>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login">เข้าสู่ระบบ</button>
+      <button class="auth-tab" id="tab-register">สมัครสมาชิก</button>
+    </div>
+
+    <div id="login-form">
+      <label>User ID</label>
+      <input type="text" id="login-userid" autocomplete="username">
+      <label>รหัสผ่าน</label>
+      <input type="password" id="login-password" autocomplete="current-password">
+      <button class="primary" id="btn-login" style="width:100%;margin-top:14px;">เข้าสู่ระบบ</button>
+      <p class="auth-error" id="login-error"></p>
+    </div>
+
+    <div id="register-form" style="display:none;">
+      <label>ชื่อเล่น (Nickname)</label>
+      <input type="text" id="reg-nickname">
+      <label>User ID (ใช้ล็อกอิน)</label>
+      <input type="text" id="reg-userid" autocomplete="username">
+      <label>รหัสผ่าน</label>
+      <input type="password" id="reg-password" autocomplete="new-password">
+      <label>ยืนยันรหัสผ่าน</label>
+      <input type="password" id="reg-password2" autocomplete="new-password">
+      <button class="primary" id="btn-register" style="width:100%;margin-top:14px;">สมัครสมาชิก</button>
+      <p class="auth-error" id="register-error"></p>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" id="main-wrap" style="display:none;">
 
   <header class="top">
     <div>
       <h1>ระบบตรวจสอบการชำระเงิน <span class="badge-live">Prototype</span></h1>
       <p>ต้นแบบเว็บแอป — เชื่อมข้อมูลจริงจาก Working Reference / Archive</p>
     </div>
-    <span class="conn-status connecting" id="conn-status" title="">
-      <span class="dot"></span><span id="conn-status-text">กำลังเชื่อมต่อ Google Sheet…</span>
-    </span>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="note" id="user-info"></span>
+      <button class="ghost" id="btn-logout">ออกจากระบบ</button>
+      <span class="conn-status connecting" id="conn-status" title="">
+        <span class="dot"></span><span id="conn-status-text">กำลังเชื่อมต่อ Google Sheet…</span>
+      </span>
+    </div>
   </header>
+
 
   <nav class="tabs">
     <button data-tab="check" class="active">ตรวจสอบ</button>
@@ -185,6 +234,7 @@
     <button data-tab="wr">Working Reference</button>
     <button data-tab="ar">Archive</button>
     <button data-tab="fix">ตรวจ+ซ่อมงวด</button>
+    <button data-tab="admin" id="tab-admin-nav" style="display:none;">Admin</button>
   </nav>
 
   <section class="panel active" id="panel-check">
@@ -365,11 +415,27 @@
     </div>
   </section>
 
+  <section class="panel" id="panel-admin">
+    <div class="card">
+      <div class="toolbar">
+        <h2 style="margin:0;">บันทึกกิจกรรมผู้ใช้ (Activity Log)</h2>
+        <button class="ghost" id="btn-refresh-activity">↻ โหลดใหม่</button>
+      </div>
+      <div class="filter-col-row" style="margin-bottom:14px;">
+        <input type="text" id="activity-filter-user" placeholder="กรองตาม User ID / ชื่อเล่น">
+        <input type="text" id="activity-filter-action" placeholder="กรองตามกิจกรรม">
+      </div>
+      <div id="activity-log-table"></div>
+    </div>
+  </section>
+
 </div>
 
 <script>
 /* ===== เชื่อมข้อมูลจริงจาก Google Sheet ผ่าน Apps Script Web App ===== */
 const API_URL = "https://script.google.com/macros/s/AKfycbyXS_6-VR8Jyfqom2QGf2BoWWhJVhpHq1p-YxW_Mx2WqjMJGJrrAuHQlo1hPaBEfGgIfw/exec";
+// ต้องตรงกับ API_SECRET ใน Code.gs เป๊ะ — กันคนนอกที่บังเอิญเจอ URL ของ Apps Script เรียกข้อมูลตรงๆ
+const API_SECRET = "hft8Da-_fs8P1AHJHY8fTwF8b2FaTH3v";
 
 let WR_DATA = [];
 let AR_DATA = [];
@@ -392,7 +458,7 @@ function jsonp_(url){
 }
 
 async function apiGet(action, extraParams){
-  const params = new URLSearchParams({ action, ...(extraParams||{}) });
+  const params = new URLSearchParams({ action, secret: API_SECRET, ...(extraParams||{}) });
   const url = `${API_URL}?${params.toString()}`;
   let lastErr;
   // ปัญหาชั่วคราว (Apps Script ตอบช้า/hiccup ชั่วครู่) มักหายไปถ้าลองใหม่ — ลองสูงสุด 3 ครั้งก่อนยอมแพ้
@@ -417,7 +483,7 @@ async function apiPost(action, payload){
     method: "POST",
     mode: "no-cors",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, ...(payload||{}) })
+    body: JSON.stringify({ action, secret: API_SECRET, ...(payload||{}) })
   });
 }
 
@@ -694,6 +760,7 @@ async function commitToWR(){
     await saveRows();
     renderCheckTable();
     renderDashboard();
+    logActivity('บันทึกเข้า Working Reference', `${committingBatch.length} รายการ`);
     alert(`บันทึก ${committingBatch.length} รายการเข้า Working Reference เรียบร้อย (เรียงตามลำดับตรวจก่อน-หลัง)`);
   }catch(e){
     alert('บันทึกไม่สำเร็จ: ' + e.message);
@@ -962,6 +1029,7 @@ function addRow(){
   };
   if(!row.code && !row.period && !row.amount && !row.fee && !row.cum) return;
   checkRows.push(row);
+  logActivity('เพิ่มรายการตรวจสอบ', `รหัส ${row.code} งวด ${row.period} ยอด ${row.amount}`);
   ['in-code','in-period','in-amount','in-fee','in-cum','in-slip'].forEach(id=>document.getElementById(id).value='');
   slipManuallyEdited = false;
   document.getElementById('in-code').focus();
@@ -1142,6 +1210,7 @@ async function runArchiveClosed(){
             <div class="sub">รหัสลูกค้าที่ย้าย: ${result.customerList.join(', ')}</div>
           </div>
         </div>`;
+      logActivity('ย้ายลูกค้าที่จบ', `${result.customers} คน (${result.rows} แถว): ${result.customerList.join(', ')}`);
       WR_DATA = await apiGet('getWR');
       AR_DATA = await apiGet('getArchive');
       renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
@@ -1199,6 +1268,7 @@ async function confirmMoveToReturned(){
   try{
     const result = await apiGet('moveToReturned', {code});
     previewEl.innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">ย้าย ${result.rows} แถวของลูกค้า ${code} ไปคืนเครื่องเรียบร้อย</div></div></div>`;
+    logActivity('ย้ายลูกค้าไปคืนเครื่อง', `รหัส ${code} (${result.rows} แถว)`);
     document.getElementById('return-code-input').value = '';
     WR_DATA = await apiGet('getWR');
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
@@ -1344,6 +1414,7 @@ async function runFix(){
   logCard.style.display = 'none';
   try{
     const result = await apiGet('runPeriodFix');
+    logActivity('รันตรวจ+ซ่อมงวด', `แก้อัตโนมัติ ${result.fixedAuto} รายการ, ต้องตรวจสอบเอง ${result.flaggedReview} รายการ`);
     summaryEl.style.display = '';
     summaryEl.innerHTML = `
       <div class="banner ${result.flaggedReview>0 ? 'bad':'ok'}">
@@ -1387,6 +1458,8 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
     if(btn.dataset.tab==='dash') renderDashboard();
     if(btn.dataset.tab==='wr') renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     if(btn.dataset.tab==='ar') renderRefTable(AR_DATA,'ar-table','ar-hint', document.getElementById('ar-search').value);
+    if(btn.dataset.tab==='admin') renderActivityLog();
+    logActivity('เปิดแท็บ', btn.textContent.trim());
   });
 });
 
@@ -1474,7 +1547,7 @@ function setConnStatus(state, message){
   textEl.textContent = message && state === 'connected' ? message : labels[state];
 }
 
-(async function init(){
+async function init(){
   const today = new Date();
   document.getElementById('check-date').value = today.toISOString().slice(0,10);
   populateBackfillDateSelects();
@@ -1494,6 +1567,143 @@ function setConnStatus(state, message){
   await loadRows();
   renderCheckTable();
   renderDashboard();
+}
+
+/* ===================== ระบบล็อกอิน / สมัครสมาชิก / บันทึกกิจกรรม ===================== */
+let currentUser = null; // {userId, nickname, isAdmin}
+
+function saveSession_(user){
+  try{ localStorage.setItem('payment_check_user', JSON.stringify(user)); }catch(e){}
+}
+function loadSession_(){
+  try{
+    const raw = localStorage.getItem('payment_check_user');
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function clearSession_(){
+  try{ localStorage.removeItem('payment_check_user'); }catch(e){}
+}
+
+// บันทึกกิจกรรม — ยิงแบบไม่รอผล (fire-and-forget) ไม่ให้กระทบความเร็วการใช้งานจริง
+function logActivity(action, detail){
+  if(!currentUser) return;
+  apiPost('logActivity', {
+    userId: currentUser.userId,
+    nickname: currentUser.nickname,
+    action_: action,
+    detail: detail || ''
+  }).catch(e=>console.warn('logActivity failed:', e));
+}
+
+function enterApp(user){
+  currentUser = user;
+  saveSession_(user);
+  document.getElementById('auth-overlay').style.display = 'none';
+  document.getElementById('main-wrap').style.display = '';
+  document.getElementById('user-info').textContent = `${user.nickname} (${user.userId})${user.isAdmin ? ' · Admin' : ''}`;
+  document.getElementById('tab-admin-nav').style.display = user.isAdmin ? '' : 'none';
+  logActivity('เปิดเว็บ', '');
+  init();
+}
+
+async function doLogin(){
+  const userId = document.getElementById('login-userid').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = '';
+  if(!userId || !password){ errEl.textContent = 'กรอก User ID และรหัสผ่านให้ครบ'; return; }
+  const btn = document.getElementById('btn-login');
+  btn.disabled = true; btn.textContent = 'กำลังเข้าสู่ระบบ...';
+  try{
+    const result = await apiGet('login', { userId, password });
+    if(!result.success){ errEl.textContent = result.error || 'เข้าสู่ระบบไม่สำเร็จ'; return; }
+    enterApp({ userId: result.userId, nickname: result.nickname, isAdmin: result.isAdmin });
+  }catch(e){
+    errEl.textContent = 'เชื่อมต่อไม่สำเร็จ: ' + e.message;
+  }finally{
+    btn.disabled = false; btn.textContent = 'เข้าสู่ระบบ';
+  }
+}
+
+async function doRegister(){
+  const nickname = document.getElementById('reg-nickname').value.trim();
+  const userId = document.getElementById('reg-userid').value.trim();
+  const password = document.getElementById('reg-password').value;
+  const password2 = document.getElementById('reg-password2').value;
+  const errEl = document.getElementById('register-error');
+  errEl.textContent = '';
+  if(!nickname || !userId || !password || !password2){ errEl.textContent = 'กรอกข้อมูลให้ครบทุกช่อง'; return; }
+  if(password !== password2){ errEl.textContent = 'รหัสผ่านและยืนยันรหัสผ่านไม่ตรงกัน'; return; }
+  const btn = document.getElementById('btn-register');
+  btn.disabled = true; btn.textContent = 'กำลังสมัคร...';
+  try{
+    const result = await apiGet('register', { userId, nickname, password });
+    if(!result.success){ errEl.textContent = result.error || 'สมัครสมาชิกไม่สำเร็จ'; return; }
+    enterApp({ userId: result.userId, nickname: result.nickname, isAdmin: result.isAdmin });
+  }catch(e){
+    errEl.textContent = 'เชื่อมต่อไม่สำเร็จ: ' + e.message;
+  }finally{
+    btn.disabled = false; btn.textContent = 'สมัครสมาชิก';
+  }
+}
+
+async function renderActivityLog(){
+  const el = document.getElementById('activity-log-table');
+  el.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  try{
+    const logs = await apiGet('getActivityLogs');
+    const fUser = document.getElementById('activity-filter-user').value.trim().toLowerCase();
+    const fAction = document.getElementById('activity-filter-action').value.trim().toLowerCase();
+    const filtered = logs.filter(l=>{
+      if(fUser && !(`${l.userId} ${l.nickname}`.toLowerCase().includes(fUser))) return false;
+      if(fAction && !String(l.action).toLowerCase().includes(fAction)) return false;
+      return true;
+    });
+    if(filtered.length===0){ el.innerHTML = '<div class="empty">ไม่พบข้อมูล</div>'; return; }
+    let html = '<div class="scroll"><table><thead><tr><th>วันเวลา</th><th>User ID</th><th>ชื่อเล่น</th><th>กิจกรรม</th><th>รายละเอียด</th></tr></thead><tbody>';
+    filtered.forEach(l=>{
+      const t = l.timestamp ? new Date(l.timestamp).toLocaleString('th-TH') : '';
+      html += `<tr><td>${t}</td><td>${l.userId||''}</td><td>${l.nickname||''}</td><td>${l.action||''}</td><td>${l.detail||''}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  }catch(e){
+    el.innerHTML = `<div class="empty">โหลดไม่สำเร็จ: ${e.message}</div>`;
+  }
+}
+
+document.getElementById('tab-login').addEventListener('click', ()=>{
+  document.getElementById('tab-login').classList.add('active');
+  document.getElementById('tab-register').classList.remove('active');
+  document.getElementById('login-form').style.display = '';
+  document.getElementById('register-form').style.display = 'none';
+});
+document.getElementById('tab-register').addEventListener('click', ()=>{
+  document.getElementById('tab-register').classList.add('active');
+  document.getElementById('tab-login').classList.remove('active');
+  document.getElementById('register-form').style.display = '';
+  document.getElementById('login-form').style.display = 'none';
+});
+document.getElementById('btn-login').addEventListener('click', doLogin);
+document.getElementById('btn-register').addEventListener('click', doRegister);
+document.getElementById('login-password').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+document.getElementById('reg-password2').addEventListener('keydown', e=>{ if(e.key==='Enter') doRegister(); });
+document.getElementById('btn-logout').addEventListener('click', ()=>{
+  logActivity('ออกจากระบบ', '');
+  clearSession_();
+  location.reload();
+});
+document.getElementById('btn-refresh-activity').addEventListener('click', renderActivityLog);
+document.getElementById('activity-filter-user').addEventListener('input', renderActivityLog);
+document.getElementById('activity-filter-action').addEventListener('input', renderActivityLog);
+
+// ถ้าเคยล็อกอินไว้แล้ว (จำไว้ในเบราว์เซอร์นี้) เข้าเว็บได้ทันทีไม่ต้องล็อกอินซ้ำ
+(function bootstrapAuth(){
+  const existing = loadSession_();
+  if(existing && existing.userId){
+    enterApp(existing);
+  }
 })();
 </script>
 </body>
