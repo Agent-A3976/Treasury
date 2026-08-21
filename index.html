@@ -652,15 +652,12 @@ function computeStatus(row, index, allRows, dateOverride){
   if(!A && !B && !hasAmount && !Dv && Ev) return {status:'สะสมเพิ่มเติม', note:'รายการยอดสะสมเดี่ยว ไม่ผูกกับรหัสลูกค้า', amount: parseFloat(row.cum)||0};
   if(!A && !B && !hasAmount && Dv) return {status:'ค่าธรรมเนียมเพิ่มเติม', note:'รายการค่าธรรมเนียมเดี่ยว ไม่ผูกกับรหัสลูกค้า', amount: parseFloat(row.fee)||0};
 
-  // รูปแบบ "Dd123"/"Ss123" ในช่องงวดที่ — ค่าธรรมเนียม/สะสมเพิ่มเติมที่ผูกกับรหัสลูกค้า (ต่างจาก 2 เคสด้านบน
-  // ที่ไม่ผูกรหัสเลย) นับเข้ายอดรวมประจำวันเหมือนกันทุกอย่าง แค่มีรหัสลูกค้ากำกับไว้ดูย้อนหลังได้ว่าเป็นของใคร
-  // ไม่ผ่านการเช็คซ้ำ/เช็ครหัสลูกค้ามีอยู่จริงไหม/เช็ครูปแบบงวด และไม่มีวันถูกบันทึกเข้า Working Reference
-  if(A){
-    const feeMatch = B.match(/^dd(\d+(\.\d+)?)$/i);
-    if(feeMatch) return {status:'ค่าธรรมเนียมเพิ่มเติม', note:`ค่าธรรมเนียมเพิ่มเติมผูกกับรหัสลูกค้า ${A} (ไม่บันทึกเข้า WR)`, amount: parseFloat(feeMatch[1])};
-    const cumMatch = B.match(/^ss(\d+(\.\d+)?)$/i);
-    if(cumMatch) return {status:'สะสมเพิ่มเติม', note:`สะสมเพิ่มเติมผูกกับรหัสลูกค้า ${A} (ไม่บันทึกเข้า WR)`, amount: parseFloat(cumMatch[1])};
-  }
+  // ค่าธรรมเนียม/สะสมเพิ่มเติมที่ผูกกับรหัสลูกค้า — มีรหัสลูกค้า แต่ไม่มีงวด/จำนวนเงิน มีแค่ช่องค่าธรรมเนียม
+  // หรือช่องสะสมถูกกรอกไว้ (ปกติมาจากการวางข้อมูล 2 บรรทัด "รหัส" + "Dd123"/"Ss123" ที่แยกตัวเลข
+  // ไปลงช่องนี้ให้อัตโนมัติแล้ว แต่พิมพ์ตรงๆ ในช่องก็ได้ผลเหมือนกัน) นับเข้ายอดรวมประจำวันเหมือนกันทุกอย่าง
+  // แค่มีรหัสลูกค้ากำกับไว้ดูย้อนหลังได้ว่าเป็นของใคร ไม่ผ่านการเช็คซ้ำ/เช็ครูปแบบงวด และไม่บันทึกเข้า Working Reference
+  if(A && !B && !hasAmount && !Dv && Ev) return {status:'สะสมเพิ่มเติม', note:`สะสมเพิ่มเติมผูกกับรหัสลูกค้า ${A} (ไม่บันทึกเข้า WR)`, amount: parseFloat(row.cum)||0};
+  if(A && !B && !hasAmount && Dv) return {status:'ค่าธรรมเนียมเพิ่มเติม', note:`ค่าธรรมเนียมเพิ่มเติมผูกกับรหัสลูกค้า ${A} (ไม่บันทึกเข้า WR)`, amount: parseFloat(row.fee)||0};
 
   // แปลงวันที่ทำรายการ (ช่อง "วันที่ทำรายการ" ด้านบนตาราง) เป็นรูปแบบเดียวกับคอลัมน์ H/I/J ใน
   // Working Reference / Archive เพื่อใช้เทียบตอนเช็ค "ซ้ำ" — ซ้ำจริงต้อง รหัส+งวด+ยอด+วันที่ ตรงกันหมด
@@ -1670,6 +1667,8 @@ document.getElementById('in-slip').addEventListener('input', ()=>{ slipManuallyE
 
 // รองรับวางแบบ 3 บรรทัด (รหัสลูกค้า / งวดที่ / จำนวนเงิน) ใส่ในฟอร์มเพิ่มรายการทีละอัน
 // วางลงช่องไหนในฟอร์มก็ได้ ระบบจะแยกกระจายให้ครบ 3 ช่องอัตโนมัติ
+// รองรับวางแบบ 2 บรรทัด (รหัสลูกค้า / Dd123 หรือ Ss123) ด้วย — แยกเฉพาะตัวเลขไปใส่ช่อง
+// ค่าธรรมเนียม (Dd) หรือสะสม (Ss) โดยตรง เว้นช่องงวดที่ว่างไว้ (ไม่ใช่รายการงวดจริง)
 function handleStackedPaste(e){
   const text = (e.clipboardData || window.clipboardData).getData('text');
   const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l!=='');
@@ -1681,8 +1680,25 @@ function handleStackedPaste(e){
     slipManuallyEdited = false;
     recalcSlipFromFields();
     document.getElementById('in-fee').focus();
+    return;
   }
-  // น้อยกว่า 3 บรรทัด ปล่อยให้วางตามปกติ ไม่ยุ่ง
+  if(lines.length === 2){
+    const feeMatch = lines[1].match(/^dd(\d+(\.\d+)?)$/i);
+    const cumMatch = lines[1].match(/^ss(\d+(\.\d+)?)$/i);
+    if(feeMatch || cumMatch){
+      e.preventDefault();
+      document.getElementById('in-code').value = lines[0];
+      document.getElementById('in-period').value = '';
+      document.getElementById('in-amount').value = '';
+      document.getElementById('in-fee').value = feeMatch ? feeMatch[1] : '';
+      document.getElementById('in-cum').value = cumMatch ? cumMatch[1] : '';
+      slipManuallyEdited = false;
+      recalcSlipFromFields();
+      document.getElementById('in-slip').focus();
+    }
+    // 2 บรรทัดแต่ไม่ตรงรูปแบบ Dd/Ss ปล่อยให้วางตามปกติ ไม่ยุ่ง
+  }
+  // น้อยกว่า 2 บรรทัด ปล่อยให้วางตามปกติ ไม่ยุ่ง
 }
 ['in-code','in-period','in-amount'].forEach(id=>{
   document.getElementById(id).addEventListener('paste', handleStackedPaste);
