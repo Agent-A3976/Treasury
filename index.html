@@ -313,6 +313,7 @@
           <option value="งวดนี้จ่ายครบไปแล้ว">งวดนี้จ่ายครบไปแล้ว</option>
           <option value="ค่าธรรมเนียมเพิ่มเติม">ค่าธรรมเนียมเพิ่มเติม</option>
           <option value="สะสมเพิ่มเติม">สะสมเพิ่มเติม</option>
+          <option value="ค่าธรรมเนียม+สะสมเพิ่มเติม">ค่าธรรมเนียม+สะสมเพิ่มเติม</option>
         </select>
         <button class="ghost" id="btn-clear-filters">ล้างตัวกรอง</button>
       </div>
@@ -649,6 +650,13 @@ function computeStatus(row, index, allRows, dateOverride){
 
   const allEmpty = !A && !B && !hasAmount && !Dv && !Ev;
   if(allEmpty) return {status:'', note:''};
+
+  // มีทั้งค่าธรรมเนียมและสะสมพร้อมกัน (ไม่มีงวด/จำนวนเงิน) — ต้องเช็คเคสนี้ก่อนเช็คแยกทีละอย่างด้านล่าง
+  // ไม่งั้นถ้าเช็คแยก จะเจอค่าธรรมเนียมก่อนแล้วถือเป็นค่าธรรมเนียมเพิ่มเติมอย่างเดียว ทำให้ยอดสะสมหายไปเงียบๆ
+  const feeCumOnly = !B && !hasAmount && Dv && Ev;
+  if(!A && feeCumOnly) return {status:'ค่าธรรมเนียม+สะสมเพิ่มเติม', note:'รายการค่าธรรมเนียม+สะสมพร้อมกัน ไม่ผูกกับรหัสลูกค้า', feeAmount: parseFloat(row.fee)||0, cumAmount: parseFloat(row.cum)||0};
+  if(A && feeCumOnly) return {status:'ค่าธรรมเนียม+สะสมเพิ่มเติม', note:`ค่าธรรมเนียม+สะสมเพิ่มเติมผูกกับรหัสลูกค้า ${A} (ไม่บันทึกเข้า WR)`, feeAmount: parseFloat(row.fee)||0, cumAmount: parseFloat(row.cum)||0};
+
   if(!A && !B && !hasAmount && !Dv && Ev) return {status:'สะสมเพิ่มเติม', note:'รายการยอดสะสมเดี่ยว ไม่ผูกกับรหัสลูกค้า', amount: parseFloat(row.cum)||0};
   if(!A && !B && !hasAmount && Dv) return {status:'ค่าธรรมเนียมเพิ่มเติม', note:'รายการค่าธรรมเนียมเดี่ยว ไม่ผูกกับรหัสลูกค้า', amount: parseFloat(row.fee)||0};
 
@@ -931,7 +939,7 @@ function nextSeq(){
 
 function pillClass(status){
   const green = ['ถูก','ลูกค้าใหม่','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
-  const gray = ['ค่าธรรมเนียมเพิ่มเติม','สะสมเพิ่มเติม'];
+  const gray = ['ค่าธรรมเนียมเพิ่มเติม','สะสมเพิ่มเติม','ค่าธรรมเนียม+สะสมเพิ่มเติม'];
   const amber = ['รอครบงวด','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง'];
   const red = ['ซ้ำ','ซ้ำในรายการตรวจ','งวดนี้จ่ายครบไปแล้ว','ลูกค้าปิดสัญญาแล้ว','ไม่พบข้อมูลลูกค้า'];
   if(green.includes(status)) return 'p-green';
@@ -1104,6 +1112,7 @@ function sumMoney(pairs){
   const okStatuses = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
   const feeOnlyStatuses = ['ค่าธรรมเนียมเพิ่มเติม'];
   const cumOnlyStatuses = ['สะสมเพิ่มเติม'];
+  const feeCumBothStatuses = ['ค่าธรรมเนียม+สะสมเพิ่มเติม'];
   let installTotal=0, feeTotal=0, cumTotal=0, slipTotal=0, pendingTotal=0;
   pairs.forEach(({row, r})=>{
     if(okStatuses.includes(r.status)){
@@ -1112,6 +1121,11 @@ function sumMoney(pairs){
       cumTotal += parseFloat(row.cum)||0;
       slipTotal += parseFloat(row.slip)||0;
       if(r.status==='รอครบงวด') pendingTotal += parseFloat(row.amount)||0;
+    } else if(feeCumBothStatuses.includes(r.status)){
+      // มีทั้งค่าธรรมเนียมและสะสมพร้อมกันในแถวเดียว — นับเข้าทั้งสองยอด ไม่ให้ก้อนไหนหายไป
+      feeTotal += r.feeAmount||0;
+      cumTotal += r.cumAmount||0;
+      slipTotal += parseFloat(row.slip)||0;
     } else if(feeOnlyStatuses.includes(r.status)){
       // รายการค่าธรรมเนียมเพิ่มเติม — ไม่ว่าจะไม่ผูกรหัสเลย (กรอกช่อง "ค่าธรรมเนียม" ตรงๆ)
       // หรือผูกกับรหัสลูกค้าผ่านรูปแบบ "Dd123" ในช่องงวด ก็ยังเป็นเงินจริงที่รับวันนี้เหมือนกัน
