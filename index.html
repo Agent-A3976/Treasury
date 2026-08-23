@@ -445,7 +445,7 @@
       </div>
       <div id="return-preview"></div>
       <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);">
-        <p class="hint" style="margin:0 0 10px;">หรือให้ระบบสแกนหาเองจากช่อง "จำนวนเงิน" ที่มีคำว่า "คืน" ปนอยู่ (เช่น เคยพิมพ์โน้ตว่า "คืนเครื่อง" ไว้ในช่องนี้) แล้วย้ายประวัติทั้งหมดของลูกค้าที่เจอทีเดียว</p>
+        <p class="hint" style="margin:0 0 10px;">หรือให้ระบบสแกนหาเองจากช่อง "จำนวนเงิน" ที่มีคำว่า "คืน" ปนอยู่ (เช่น เคยพิมพ์โน้ตว่า "คืนเครื่อง" ไว้ในช่องนี้) แล้วย้ายเฉพาะแถวที่เจอคำนี้จริงๆ (ไม่ย้ายทั้งประวัติของรหัสลูกค้า — กันกรณีรหัสเดิมถูกใช้ซ้ำหลังคืนแล้วซื้อใหม่)</p>
         <button class="primary" id="btn-archive-returned">▶ สแกนหาคำว่า "คืน" แล้วย้ายทั้งหมด</button>
       </div>
       <div class="card" id="archive-returned-result" style="display:none;margin-top:14px;"></div>
@@ -1473,7 +1473,7 @@ async function runArchiveClosed(){
 }
 
 async function runArchiveReturnedByAmount(){
-  if(!confirm('ระบบจะสแกน Working Reference ทั้งชีท หาแถวที่ช่อง "จำนวนเงิน" มีคำว่า "คืน" ปนอยู่ แล้วย้ายประวัติทั้งหมดของลูกค้าที่เจอไปชีท "คืนเครื่อง" ทันที (ลบออกจาก Working Reference ถาวร)\n\nยืนยันดำเนินการต่อไหม?')) return;
+  if(!confirm('ระบบจะสแกน Working Reference ทั้งชีท หาแถวที่ช่อง "จำนวนเงิน" มีคำว่า "คืน" ปนอยู่ แล้วย้ายเฉพาะแถวที่เจอไปชีท "คืนเครื่อง" ทันที (ลบออกจาก Working Reference ถาวร — แถวอื่นของรหัสลูกค้าเดียวกันที่ไม่มีคำว่าคืนจะไม่ถูกย้าย)\n\nยืนยันดำเนินการต่อไหม?')) return;
   const btn = document.getElementById('btn-archive-returned');
   const resultEl = document.getElementById('archive-returned-result');
   const origLabel = btn.textContent;
