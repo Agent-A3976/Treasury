@@ -444,6 +444,11 @@
         <button class="ghost" id="btn-preview-return">ค้นหา</button>
       </div>
       <div id="return-preview"></div>
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);">
+        <p class="hint" style="margin:0 0 10px;">หรือให้ระบบสแกนหาเองจากช่อง "จำนวนเงิน" ที่มีคำว่า "คืน" ปนอยู่ (เช่น เคยพิมพ์โน้ตว่า "คืนเครื่อง" ไว้ในช่องนี้) แล้วย้ายประวัติทั้งหมดของลูกค้าที่เจอทีเดียว</p>
+        <button class="primary" id="btn-archive-returned">▶ สแกนหาคำว่า "คืน" แล้วย้ายทั้งหมด</button>
+      </div>
+      <div class="card" id="archive-returned-result" style="display:none;margin-top:14px;"></div>
     </div>
   </section>
 
@@ -1467,6 +1472,40 @@ async function runArchiveClosed(){
   }
 }
 
+async function runArchiveReturnedByAmount(){
+  if(!confirm('ระบบจะสแกน Working Reference ทั้งชีท หาแถวที่ช่อง "จำนวนเงิน" มีคำว่า "คืน" ปนอยู่ แล้วย้ายประวัติทั้งหมดของลูกค้าที่เจอไปชีท "คืนเครื่อง" ทันที (ลบออกจาก Working Reference ถาวร)\n\nยืนยันดำเนินการต่อไหม?')) return;
+  const btn = document.getElementById('btn-archive-returned');
+  const resultEl = document.getElementById('archive-returned-result');
+  const origLabel = btn.textContent;
+  btn.disabled = true; btn.textContent = 'กำลังสแกนและย้าย...';
+  resultEl.style.display = 'none';
+  try{
+    const result = await apiGet('archiveReturnedByAmount');
+    resultEl.style.display = '';
+    if(result.customers === 0){
+      resultEl.innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">ไม่พบแถวที่มีคำว่า "คืน" ในช่องจำนวนเงิน</div></div></div>`;
+    } else {
+      resultEl.innerHTML = `
+        <div class="banner ok">
+          <div class="icon">✓</div>
+          <div>
+            <div class="title">ย้ายไปคืนเครื่องเรียบร้อย — ${result.customers} คน (${result.rows} แถว)</div>
+            <div class="sub">รหัสลูกค้าที่ย้าย: ${result.customerList.join(', ')}</div>
+          </div>
+        </div>`;
+      logActivity('ย้ายลูกค้าไปคืนเครื่อง (สแกนอัตโนมัติ)', `${result.customers} คน (${result.rows} แถว): ${result.customerList.join(', ')}`);
+      WR_DATA = await apiGet('getWR');
+      renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
+      renderDashboard();
+    }
+  }catch(e){
+    resultEl.style.display = '';
+    resultEl.innerHTML = `<div class="banner bad"><div class="icon">!</div><div><div class="title">ย้ายไม่สำเร็จ</div><div class="sub">${e.message}</div></div></div>`;
+  }finally{
+    btn.disabled = false; btn.textContent = origLabel;
+  }
+}
+
 async function previewReturn(){
   const code = document.getElementById('return-code-input').value.trim();
   const previewEl = document.getElementById('return-preview');
@@ -1791,6 +1830,7 @@ document.getElementById('btn-import-wr').addEventListener('click', importWRPaste
 document.getElementById('btn-import-check').addEventListener('click', importCheckPaste);
 document.getElementById('btn-run-fix').addEventListener('click', runFix);
 document.getElementById('btn-archive-closed').addEventListener('click', runArchiveClosed);
+document.getElementById('btn-archive-returned').addEventListener('click', runArchiveReturnedByAmount);
 document.getElementById('btn-save-daily-report').addEventListener('click', saveDailyReport);
 document.getElementById('btn-range-summary').addEventListener('click', loadRangeSummary);
 document.getElementById('btn-seq-range-summary').addEventListener('click', renderSeqRangeSummary);
