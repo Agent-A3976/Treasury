@@ -358,7 +358,7 @@
       <p class="hint" style="margin-top:8px;">รวมยอดตามสลิปเฉพาะรายการที่ผลตรวจถูกต้อง (ถูก / ลูกค้าใหม่ / รอครบงวด) แล้วเทียบกับยอดรวมประจำวันที่ระบบคำนวณได้</p>
     </div>
     <div class="card">
-      <h2>การใช้งานพื้นที่ตาราง (Table capacity)</h2>
+      <h2>ขนาดข้อมูลใน Working Reference</h2>
       <div id="dash-capacity"></div>
     </div>
     <div class="card accent-teal" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
@@ -1095,6 +1095,9 @@ function renderCheckTable(){
   el.querySelectorAll('.del').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       checkRows.splice(parseInt(btn.dataset.i),1);
+      // ลบรายการด้วยมือ (แก้รายการที่กรอกผิด) ให้ร่นเลขลำดับที่เหลือใหม่ต่อเนื่องกัน 1..N
+      // ต่างจากตอน "บันทึกเข้า WR" ที่ตั้งใจให้เลขเดิมนิ่งไว้ เพื่อใช้อ้างอิงช่วงย้อนหลังได้
+      checkRows.forEach((row,idx)=>{ row.seq = idx+1; });
       saveRows(); renderCheckTable(); renderDashboard();
     });
   });
@@ -1136,6 +1139,11 @@ let lastCheckResults = []; // ผลตรวจสอบล่าสุดข�
 
 // คำนวณยอดเงินจาก pairs ({row, r}) ชุดหนึ่ง — ใช้ทั้งกับ checkRows ทั้งหมด (Dashboard หลัก)
 // และกับ subset ที่กรองด้วยช่วงลำดับที่ (สรุปช่วงลำดับที่ตรวจ)
+// สถานะที่ "นับเข้ายอดรวม" ทั้งหมด — แยกไว้ตรงนี้จุดเดียว ให้ sumMoney() และส่วนสรุปช่วงลำดับที่
+// ใช้ชุดเดียวกันเป๊ะๆ กันหลุดไม่ตรงกันถ้าแก้จุดหนึ่งแล้วลืมอีกจุด
+const COUNTED_STATUSES = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)','ค่าธรรมเนียมเพิ่มเติม','สะสมเพิ่มเติม','ค่าธรรมเนียม+สะสมเพิ่มเติม'];
+function isCountedStatus(status){ return COUNTED_STATUSES.includes(status); }
+
 function sumMoney(pairs){
   const okStatuses = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
   const feeOnlyStatuses = ['ค่าธรรมเนียมเพิ่มเติม'];
@@ -1238,17 +1246,23 @@ function renderDashboard(){
   `;
 
   const capWR = WR_DATA.length;
-  const capacity = 25000;
-  const pct = Math.min(100, (capWR/capacity*100));
-  const cls = pct>=90?'danger':(pct>=80?'warn':'');
+  // Google Sheets ไม่มีข้อจำกัด 25,000 แถวแบบ Excel Table เดิม (รองรับหลักล้านเซลล์)
+  // ตัวเลขนี้เลยไม่ใช่ "เต็ม/ไม่เต็ม" อีกต่อไป แต่ยังมีผลจริงต่อความเร็วเว็บ เพราะทุกครั้งที่เปิดหน้า
+  // ต้องโหลดข้อมูลทั้งชีทผ่าน JSONP — แถวยิ่งเยอะยิ่งโหลดช้า จึงเปลี่ยนความหมายเป็น "ระดับขนาดข้อมูล" แทน
+  const sizeThresholds = { warn: 8000, danger: 20000 }; // เกณฑ์แนะนำคร่าวๆ ไม่ใช่ข้อจำกัดจริงของระบบ
+  const cls = capWR >= sizeThresholds.danger ? 'danger' : (capWR >= sizeThresholds.warn ? 'warn' : '');
+  const pct = Math.min(100, (capWR / sizeThresholds.danger) * 100); // แค่ scale แถบภาพให้ดูสัดส่วนคร่าวๆ
+  const sizeLabel = cls==='danger' ? 'ข้อมูลใหญ่มาก อาจเริ่มโหลดหน้าเว็บช้า แนะนำย้ายลูกค้าที่จบออกโดยเร็ว'
+    : cls==='warn' ? 'ข้อมูลเริ่มใหญ่ แนะนำย้ายลูกค้าที่จบออกบ้าง'
+    : 'ขนาดข้อมูลปกติ';
   document.getElementById('dash-capacity').innerHTML = `
     <div class="cap-block">
       <div class="cap-row">
         <span class="cap-name">Working Reference</span>
-        <span class="cap-pct ${cls}">${pct.toFixed(1)}%</span>
+        <span class="cap-pct ${cls}">${fmt(capWR)} แถว</span>
       </div>
       <div class="cap-bar"><div class="cap-fill ${cls}" style="width:${pct}%"></div></div>
-      <div class="cap-note">ใช้ไปแล้ว ${fmt(capWR)} จากทั้งหมด ${fmt(capacity)} แถว${pct>=80?' — ใกล้เต็ม แนะนำขยายตาราง':''}</div>
+      <div class="cap-note">${sizeLabel}</div>
     </div>
   `;
 }
@@ -1297,14 +1311,19 @@ function renderSeqRangeSummary(){
     return;
   }
   const t = sumMoney(pairs);
+  const countedN = pairs.filter(({r})=>isCountedStatus(r.status)).length;
+  const excludedN = pairs.length - countedN;
   const rangeLabel = (from===null && to===null) ? 'ทั้งหมด'
     : `ลำดับที่ ${from===null?'เริ่มต้น':from} ถึง ${to===null?'ล่าสุด':to}`;
+  const countLine = excludedN>0
+    ? `รวมยอดจริง ${countedN.toLocaleString()} รายการ · ไม่นับ ${excludedN.toLocaleString()} รายการ (ผิด)`
+    : `${countedN.toLocaleString()} รายการในช่วงนี้`;
   resultEl.innerHTML = `
     <div class="banner ok">
       <div class="icon">✓</div>
       <div>
         <div class="title">${fmt(t.dailyTotal)} บาท — ยอดรวมประจำวัน (${rangeLabel})</div>
-        <div class="sub">${pairs.length.toLocaleString()} รายการในช่วงนี้</div>
+        <div class="sub">${countLine}</div>
       </div>
     </div>
     <div class="chiprow">
