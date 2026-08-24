@@ -213,6 +213,11 @@
       <input type="text" id="reg-nickname">
       <label>User ID (ใช้ล็อกอิน)</label>
       <input type="text" id="reg-userid" autocomplete="username">
+      <label>สาขาที่ทำงาน</label>
+      <select id="reg-branch">
+        <option value="surat">สุราษ</option>
+        <option value="samui">สมุย</option>
+      </select>
       <label>รหัสผ่าน</label>
       <div class="pw-field">
         <input type="password" id="reg-password" autocomplete="new-password">
@@ -231,12 +236,14 @@
 
 <div class="wrap" id="main-wrap" style="display:none;">
 
+
   <header class="top">
     <div>
       <h1>ระบบตรวจสอบการชำระเงิน <span class="badge-live">Prototype</span></h1>
       <p>ต้นแบบเว็บแอป — เชื่อมข้อมูลจริงจาก Working Reference / Archive</p>
     </div>
     <div style="display:flex;align-items:center;gap:10px;">
+      <select id="branch-switcher" style="display:none;padding:6px 10px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;background:var(--card);"></select>
       <span class="note" id="user-info"></span>
       <button class="ghost" id="btn-logout">ออกจากระบบ</button>
       <span class="conn-status connecting" id="conn-status" title="">
@@ -244,6 +251,9 @@
       </span>
     </div>
   </header>
+  <div id="branch-switch-loading" style="display:none;padding:10px 16px;background:var(--teal-l);color:var(--teal);font-size:13px;text-align:center;">
+    กำลังโหลดข้อมูลสาขาใหม่...
+  </div>
 
 
   <nav class="tabs">
@@ -401,6 +411,9 @@
         </div>
       </div>
       <button class="primary" id="btn-range-summary">สรุปยอด</button>
+      <label id="report-all-branches-wrap" style="display:none;margin-left:12px;font-size:13px;color:var(--ink-2);">
+        <input type="checkbox" id="report-all-branches"> รวมทุกสาขา (แอดมินใหญ่)
+      </label>
       <div id="report-range-result" style="margin-top:14px;"></div>
     </div>
   </section>
@@ -529,7 +542,7 @@ function jsonp_(url){
 }
 
 async function apiGet(action, extraParams){
-  const params = new URLSearchParams({ action, secret: API_SECRET, ...(extraParams||{}) });
+  const params = new URLSearchParams({ action, secret: API_SECRET, branch: currentBranch, ...(extraParams||{}) });
   const url = `${API_URL}?${params.toString()}`;
   let lastErr;
   // ปัญหาชั่วคราว (Apps Script ตอบช้า/hiccup ชั่วครู่) มักหายไปถ้าลองใหม่ — ลองสูงสุด 3 ครั้งก่อนยอมแพ้
@@ -554,7 +567,7 @@ async function apiPost(action, payload){
     method: "POST",
     mode: "no-cors",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, secret: API_SECRET, ...(payload||{}) })
+    body: JSON.stringify({ action, secret: API_SECRET, branch: currentBranch, ...(payload||{}) })
   });
 }
 
@@ -1343,11 +1356,13 @@ function renderSeqRangeSummary(){
 async function loadRangeSummary(){
   const from = document.getElementById('report-range-from').value;
   const to = document.getElementById('report-range-to').value;
+  const allBranches = document.getElementById('report-all-branches').checked;
   const resultEl = document.getElementById('report-range-result');
   if(!from || !to){ resultEl.innerHTML = '<p class="hint" style="color:var(--red);">กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด</p>'; return; }
   resultEl.innerHTML = '<div class="empty">กำลังโหลด...</div>';
   try{
-    const reports = await apiGet('getDailyReports', { from, to });
+    const params = allBranches ? { from, to, branch: 'all', adminToken: currentUser.sessionToken } : { from, to };
+    const reports = await apiGet('getDailyReports', params);
     if(reports.length===0){
       resultEl.innerHTML = '<div class="empty">ไม่พบรายงานที่บันทึกไว้ในช่วงนี้</div>';
       return;
@@ -1360,11 +1375,12 @@ async function loadRangeSummary(){
       dailyTotal: s.dailyTotal + (Number(r.dailyTotal)||0),
     }), {installTotal:0,feeTotal:0,cumTotal:0,slipTotal:0,dailyTotal:0});
 
+    const branchCol = allBranches ? '<th>สาขา</th>' : '';
     let html = `
       <div class="banner ok">
         <div class="icon">✓</div>
         <div>
-          <div class="title">สรุป ${reports.length} วัน — ยอดรวมประจำวันรวมกัน ${fmt(sum.dailyTotal)} บาท</div>
+          <div class="title">สรุป ${reports.length} รายการ${allBranches?' (รวมทุกสาขา)':''} — ยอดรวมประจำวันรวมกัน ${fmt(sum.dailyTotal)} บาท</div>
           <div class="sub">${reports[0].dateLabel} ถึง ${reports[reports.length-1].dateLabel}</div>
         </div>
       </div>
@@ -1374,9 +1390,10 @@ async function loadRangeSummary(){
         <div class="chip">สะสมรวม<span class="chip-val">${fmt(sum.cumTotal)}</span></div>
         <div class="chip">ยอดตามสลิปรวม<span class="chip-val">${fmt(sum.slipTotal)}</span></div>
       </div>
-      <div class="scroll"><table><thead><tr><th>วันที่</th><th class="num">ค่างวดรวม</th><th class="num">ค่าธรรมเนียมรวม</th><th class="num">สะสมรวม</th><th class="num">ยอดตามสลิป</th><th class="num">ยอดรวมประจำวัน</th></tr></thead><tbody>`;
+      <div class="scroll"><table><thead><tr><th>วันที่</th>${branchCol}<th class="num">ค่างวดรวม</th><th class="num">ค่าธรรมเนียมรวม</th><th class="num">สะสมรวม</th><th class="num">ยอดตามสลิป</th><th class="num">ยอดรวมประจำวัน</th></tr></thead><tbody>`;
     reports.forEach(r=>{
-      html += `<tr><td>${r.dateLabel}</td><td class="num">${fmt(r.installTotal)}</td><td class="num">${fmt(r.feeTotal)}</td><td class="num">${fmt(r.cumTotal)}</td><td class="num">${fmt(r.slipTotal)}</td><td class="num">${fmt(r.dailyTotal)}</td></tr>`;
+      const branchCell = allBranches ? `<td>${r.branchLabel||r.branch||''}</td>` : '';
+      html += `<tr><td>${r.dateLabel}</td>${branchCell}<td class="num">${fmt(r.installTotal)}</td><td class="num">${fmt(r.feeTotal)}</td><td class="num">${fmt(r.cumTotal)}</td><td class="num">${fmt(r.slipTotal)}</td><td class="num">${fmt(r.dailyTotal)}</td></tr>`;
     });
     html += '</tbody></table></div>';
     resultEl.innerHTML = html;
@@ -1874,7 +1891,15 @@ async function init(){
 }
 
 /* ===================== ระบบล็อกอิน / สมัครสมาชิก / บันทึกกิจกรรม ===================== */
-let currentUser = null; // {userId, nickname, isAdmin, sessionToken}
+let currentUser = null; // {userId, nickname, isAdmin, sessionToken, branches: ['surat','samui']}
+
+// สาขาที่กำลังทำงานอยู่ตอนนี้ — จำไว้ใน localStorage กันต้องเลือกใหม่ทุกครั้งที่เปิดเว็บ
+const BRANCH_LABELS = { surat: 'สุราษ', samui: 'สมุย' };
+let currentBranch = localStorage.getItem('payment_check_branch') || 'surat';
+function setCurrentBranch(b){
+  currentBranch = b;
+  try{ localStorage.setItem('payment_check_branch', b); }catch(e){}
+}
 
 function saveSession_(user){
   try{ localStorage.setItem('payment_check_user', JSON.stringify(user)); }catch(e){}
@@ -1903,12 +1928,51 @@ function logActivity(action, detail){
 function enterApp(user){
   currentUser = user;
   saveSession_(user);
+
+  // ถ้าสาขาที่จำไว้ (localStorage) ไม่อยู่ในสิทธิ์ของผู้ใช้คนนี้ (เช่นสลับเครื่อง/สลับบัญชี)
+  // ให้ใช้สาขาแรกที่มีสิทธิ์แทน กันหน้าจอค้างว่างเปล่าเพราะไปขอสาขาที่เข้าไม่ได้
+  const branches = user.branches && user.branches.length ? user.branches
+    : (user.isAdmin ? Object.keys(BRANCH_LABELS) : ['surat']);
+  if(!branches.includes(currentBranch)) setCurrentBranch(branches[0]);
+
   document.getElementById('auth-overlay').style.display = 'none';
   document.getElementById('main-wrap').style.display = '';
   document.getElementById('user-info').textContent = `${user.nickname} (${user.userId})${user.isAdmin ? ' · Admin' : ''}`;
   document.getElementById('tab-admin-nav').style.display = user.isAdmin ? '' : 'none';
-  logActivity('เปิดเว็บ', '');
+  document.getElementById('report-all-branches-wrap').style.display = user.isAdmin ? '' : 'none';
+
+  const switcherEl = document.getElementById('branch-switcher');
+  if(branches.length > 1){
+    switcherEl.style.display = '';
+    switcherEl.innerHTML = branches.map(b => `<option value="${b}" ${b===currentBranch?'selected':''}>${BRANCH_LABELS[b]||b}</option>`).join('');
+  } else {
+    switcherEl.style.display = 'none';
+  }
+
+  logActivity('เปิดเว็บ', `สาขา ${BRANCH_LABELS[currentBranch]||currentBranch}`);
+  pingLoop_(); // อัปเดต "ใช้งานล่าสุด" ทันทีตอนเข้าแอป แล้วตั้งเวลาอัปเดตซ้ำเป็นระยะ
   init();
+}
+
+// อัปเดตเวลาใช้งานล่าสุดของบัญชีนี้เป็นระยะ ให้หน้าแอดมิน "จัดการผู้ใช้" คำนวณว่าใครออนไลน์อยู่ได้
+function pingLoop_(){
+  if(!currentUser) return;
+  apiGet('ping', { sessionToken: currentUser.sessionToken }).catch(()=>{});
+  setTimeout(pingLoop_, 120000); // ทุก 2 นาที
+}
+
+async function switchBranch(newBranch){
+  if(newBranch === currentBranch) return;
+  setCurrentBranch(newBranch);
+  logActivity('สลับสาขา', BRANCH_LABELS[newBranch]||newBranch);
+  document.getElementById('main-wrap').style.display = 'none';
+  document.getElementById('branch-switch-loading').style.display = '';
+  try{
+    await init(); // โหลดข้อมูลของสาขาใหม่ทั้งหมดใหม่ (WR/CheckToday/Archive ฯลฯ ล้วนผูกกับ currentBranch)
+  } finally {
+    document.getElementById('branch-switch-loading').style.display = 'none';
+    document.getElementById('main-wrap').style.display = '';
+  }
 }
 
 async function doLogin(){
@@ -1923,7 +1987,7 @@ async function doLogin(){
   try{
     const result = await apiGet('login', { userId, password });
     if(!result.success){ errEl.textContent = result.error || 'เข้าสู่ระบบไม่สำเร็จ'; return; }
-    enterApp({ userId: result.userId, nickname: result.nickname, isAdmin: result.isAdmin, sessionToken: result.sessionToken });
+    enterApp({ userId: result.userId, nickname: result.nickname, isAdmin: result.isAdmin, sessionToken: result.sessionToken, branches: result.branches });
   }catch(e){
     errEl.textContent = 'เชื่อมต่อไม่สำเร็จ: ' + e.message;
   }finally{
@@ -1934,6 +1998,7 @@ async function doLogin(){
 async function doRegister(){
   const nickname = document.getElementById('reg-nickname').value.trim();
   const userId = document.getElementById('reg-userid').value.trim();
+  const branch = document.getElementById('reg-branch').value;
   const password = document.getElementById('reg-password').value;
   const password2 = document.getElementById('reg-password2').value;
   const errEl = document.getElementById('register-error');
@@ -1943,9 +2008,9 @@ async function doRegister(){
   const btn = document.getElementById('btn-register');
   btn.disabled = true; btn.textContent = 'กำลังสมัคร...';
   try{
-    const result = await apiGet('register', { userId, nickname, password });
+    const result = await apiGet('register', { userId, nickname, password, branch });
     if(!result.success){ errEl.textContent = result.error || 'สมัครสมาชิกไม่สำเร็จ'; return; }
-    enterApp({ userId: result.userId, nickname: result.nickname, isAdmin: result.isAdmin });
+    enterApp({ userId: result.userId, nickname: result.nickname, isAdmin: result.isAdmin, sessionToken: result.sessionToken, branches: result.branches });
   }catch(e){
     errEl.textContent = 'เชื่อมต่อไม่สำเร็จ: ' + e.message;
   }finally{
@@ -1960,19 +2025,28 @@ async function renderUserManagement(){
     const users = await apiGet('getUsers', { adminToken: currentUser.sessionToken });
     if(users.length===0){ el.innerHTML = '<div class="empty">ไม่พบข้อมูล</div>'; return; }
     const adminCount = users.filter(u=>u.isAdmin).length;
-    let html = '<div class="scroll"><table><thead><tr><th>User ID</th><th>ชื่อเล่น</th><th>สิทธิ์</th><th>สถานะ</th><th>สมัครเมื่อ</th><th></th></tr></thead><tbody>';
+    const ONLINE_MS = 5*60*1000; // ถือว่า "ออนไลน์" ถ้าใช้งานล่าสุดไม่เกิน 5 นาที (ไม่ใช่เรียลไทม์เป๊ะๆ)
+    const isOnline = u => u.lastSeenAt && (Date.now() - new Date(u.lastSeenAt).getTime()) < ONLINE_MS;
+    const onlineCount = users.filter(isOnline).length;
+    let html = `<div class="chiprow" style="margin-bottom:12px;"><div class="chip">ออนไลน์ตอนนี้<span class="chip-val">${onlineCount}</span></div></div>`;
+    html += '<div class="scroll"><table><thead><tr><th>User ID</th><th>ชื่อเล่น</th><th>สิทธิ์</th><th>สถานะ</th><th>สาขา</th><th>ออนไลน์</th><th>สมัครเมื่อ</th><th></th></tr></thead><tbody>';
     users.forEach(u=>{
       const isSelf = u.userId.toLowerCase() === currentUser.userId.toLowerCase();
       const roleTogglePill = u.isAdmin ? 'p-green' : 'p-gray';
       const activePill = u.active ? 'p-green' : 'p-red';
+      const online = isOnline(u);
       const t = u.createdAt ? new Date(u.createdAt).toLocaleDateString('th-TH') : '';
       const roleBtnDisabled = (u.isAdmin && adminCount<=1) ? 'disabled title="ต้องมี Admin เหลืออย่างน้อย 1 คน"' : '';
       const activeBtnDisabled = isSelf ? 'disabled title="ปิดการใช้งานบัญชีตัวเองไม่ได้"' : '';
+      const branchLabel = u.isAdmin ? 'ทุกสาขา' : u.branches.map(b=>BRANCH_LABELS[b]||b).join(', ');
+      const branchBtn = u.isAdmin ? '' : `<button class="ghost btn-edit-branches" data-userid="${u.userId}" data-branches="${u.branches.join(',')}">แก้ไขสาขา</button>`;
       html += `<tr>
         <td>${u.userId}</td>
         <td>${u.nickname}</td>
         <td><span class="pill ${roleTogglePill}">${u.isAdmin?'Admin':'พนักงาน'}</span></td>
         <td><span class="pill ${activePill}">${u.active?'ใช้งานอยู่':'ปิดใช้งาน'}</span></td>
+        <td style="white-space:nowrap;">${branchLabel}${branchBtn}</td>
+        <td><span class="pill ${online?'p-green':'p-gray'}">${online?'ออนไลน์':'ออฟไลน์'}</span></td>
         <td>${t}</td>
         <td style="white-space:nowrap;">
           <button class="ghost btn-toggle-role" data-userid="${u.userId}" data-makeadmin="${u.isAdmin?'0':'1'}" ${roleBtnDisabled}>${u.isAdmin?'ถอด Admin':'ตั้งเป็น Admin'}</button>
@@ -1983,6 +2057,23 @@ async function renderUserManagement(){
     });
     html += '</tbody></table></div>';
     el.innerHTML = html;
+
+    el.querySelectorAll('.btn-edit-branches').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const userId = btn.dataset.userid;
+        const current = btn.dataset.branches;
+        const validCodes = Object.keys(BRANCH_LABELS);
+        const promptText = `พิมพ์รหัสสาขาที่ให้ "${userId}" เข้าถึงได้ คั่นด้วยจุลภาค\nรหัสที่ใช้ได้: ${validCodes.map(b=>`${b} (${BRANCH_LABELS[b]})`).join(', ')}`;
+        const input = prompt(promptText, current);
+        if(input === null) return; // กดยกเลิก
+        btn.disabled = true;
+        try{
+          const result = await apiGet('setUserBranches', { adminToken: currentUser.sessionToken, targetUserId: userId, branches: input });
+          if(!result.success) alert(result.error || 'ทำรายการไม่สำเร็จ');
+        }catch(e){ alert('ทำรายการไม่สำเร็จ: ' + e.message); }
+        renderUserManagement();
+      });
+    });
 
     el.querySelectorAll('.btn-toggle-role').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
@@ -2094,6 +2185,7 @@ document.getElementById('btn-logout').addEventListener('click', ()=>{
   clearSession_();
   location.reload();
 });
+document.getElementById('branch-switcher').addEventListener('change', (e)=> switchBranch(e.target.value));
 document.getElementById('btn-refresh-activity').addEventListener('click', renderActivityLog);
 document.getElementById('activity-filter-user').addEventListener('input', renderActivityLog);
 document.getElementById('activity-filter-action').addEventListener('input', renderActivityLog);
