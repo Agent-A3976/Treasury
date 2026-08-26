@@ -74,8 +74,6 @@
   button.ghost:hover{border-color:var(--ink-3);}
   table{width:100%;border-collapse:collapse;font-size:13px;}
   th{text-align:left;padding:8px 8px;font-size:11.5px;color:var(--ink-2);border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap;}
-  th.sortable{cursor:pointer;user-select:none;}
-  th.sortable:hover{color:var(--teal);}
   td{padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
   tr:last-child td{border-bottom:none;}
   .pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600;white-space:nowrap;}
@@ -270,18 +268,6 @@
       <div style="display:flex;align-items:center;gap:8px;">
         <label style="margin:0;white-space:nowrap;">วันที่ทำรายการ</label>
         <input type="date" id="check-date" style="width:160px;">
-      </div>
-      <button class="primary" id="btn-commit">บันทึกรายการที่ถูกทั้งหมดเข้า Working Reference</button>
-    </div>
-    <div class="card accent-purple">
-      <div class="toolbar">
-        <h2 style="margin:0;"><span class="card-icon purple">⇅</span>วางข้อมูลหลายรายการพร้อมกัน (จาก Excel)</h2>
-        <span class="note" id="check-import-result"></span>
-      </div>
-      <p class="hint" style="margin:0 0 8px;">คัดลอกจาก Excel มาวางได้เลย แต่ละแถวคั่นด้วย Tab เรียงเป็น: รหัสลูกค้า, งวดที่, จำนวนเงิน, ค่าธรรมเนียม, สะสม, ยอดตามสลิป (ช่องไหนไม่มีข้อมูลเว้นว่างได้ วางได้ทีละหลายสิบ-หลายร้อยแถว) — หรือจะวางแบบบรรทัดละค่า เรียง รหัสลูกค้า/งวดที่/จำนวนเงิน สลับกันไปทีละ 3 บรรทัดต่อ 1 รายการก็ได้เหมือนกัน</p>
-      <textarea id="check-paste" rows="6" placeholder="7262	2	1990			1990&#10;23833	3	2500			2500"></textarea>
-      <div style="margin-top:8px;">
-        <button class="purple" id="btn-import-check">นำเข้าทั้งหมด</button>
       </div>
     </div>
 
@@ -673,13 +659,23 @@ function nestedStatus(A, p, C, wr){
   if((p.hasDash && p.status==='') || (p.hasDash && p.status==='จบ') || (!p.hasDash && p.status==='จบ')){
     if(p.start !== J+1) return {status:'ข้ามงวด', note:skipNote(p.start,J)};
     const G = periodsCompleted(p);
-    const discount = (p.status==='จบ' && G<=5) ? 0.9 : 1;
-    const expected = (G - p.start + 1) * I * discount - K;
-    if(Math.abs(C-expected) < 0.005){
-      const note = (p.hasDash && p.status==='จบ') ? 'ชำระหลายงวดพร้อมจบสัญญา' : '';
+    // ส่วนลด 10%: ให้เฉพาะกรณีปิดสัญญา ("จบ") และ "ผ่อนมาแล้วก่อนหน้าไม่เกิน 5 งวด" (เช็คจาก J
+    // ไม่ใช่จำนวนงวดที่ปิดพร้อมกันในรอบนี้ และไม่ใช่เลขงวดสุดท้าย) — ยอมรับได้ทั้งราคาเต็มและราคาลด
+    const eligibleForDiscount = p.status==='จบ' && J<=5;
+    const periodCount = G - p.start + 1;
+    const fullExpected = periodCount * I - K;
+    const discountedExpected = periodCount * I * 0.9 - K;
+    const matchesFull = Math.abs(C-fullExpected) < 0.005;
+    const matchesDiscount = eligibleForDiscount && Math.abs(C-discountedExpected) < 0.005;
+    if(matchesFull || matchesDiscount){
+      let note = (p.hasDash && p.status==='จบ') ? 'ชำระหลายงวดพร้อมจบสัญญา' : '';
+      if(matchesDiscount) note += (note?' — ':'') + 'ใช้ส่วนลด 10%';
       return {status:'ถูก', note};
     }
-    return {status:'จำนวนเงินไม่ตรง', note:`ควรเป็น ${fmt(expected)}`};
+    const expectedNote = eligibleForDiscount
+      ? `ควรเป็น ${fmt(fullExpected)} (เต็มราคา) หรือ ${fmt(discountedExpected)} (ลด 10%)`
+      : `ควรเป็น ${fmt(fullExpected)}`;
+    return {status:'จำนวนเงินไม่ตรง', note: expectedNote};
   }
   return {status:'รูปแบบงวดไม่ถูกต้อง', note:''};
 }
@@ -817,101 +813,6 @@ function buildWRRow(customerId, periodRaw, amount, day, monthName, yearBE, conte
   const E = computeE(p, D, K, customerId, amount, context);
   const G = computeG(p);
   return [String(customerId), String(periodRaw), amount, D, E, null, G, day, monthName, yearBE, K];
-}
-
-async function commitToWR(){
-  const dateVal = document.getElementById('check-date').value;
-  if(!dateVal){ alert('กรุณาเลือกวันที่ทำรายการก่อน'); return; }
-  const [y,m,d] = dateVal.split('-').map(Number);
-  const day = d, monthName = THAI_MONTHS[m-1], yearBE = y+543;
-
-  const results = checkRows.map((row,i)=>computeStatus(row,i,checkRows));
-  const okSet = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
-  const committingBatch = [];
-  const committedIdx = new Set();
-
-  checkRows.forEach((row,i)=>{
-    const r = results[i];
-    if(!okSet.includes(r.status)) return;
-    const A = (row.code||'').trim();
-    const B = (row.period||'').trim();
-    const C = parseFloat(row.amount)||0;
-    const context = WR_DATA.concat(committingBatch);
-    const newRow = buildWRRow(A, B, C, day, monthName, yearBE, context);
-    committingBatch.push(newRow);
-    committedIdx.add(i);
-  });
-
-  if(committingBatch.length===0){
-    alert('ไม่มีรายการสถานะ ถูก / ลูกค้าใหม่ / รอครบงวด ให้บันทึก');
-    return;
-  }
-
-  const btn = document.getElementById('btn-commit');
-  const originalLabel = btn.textContent;
-  btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
-  try{
-    await apiPost('commitToWR', {rows: committingBatch});
-    committingBatch.forEach(r=>WR_DATA.push(r));
-    recomputeF();
-    checkRows = checkRows.filter((row,i)=>!committedIdx.has(i));
-    await saveRows();
-    renderCheckTable();
-    renderDashboard();
-    logActivity('บันทึกเข้า Working Reference', `${committingBatch.length} รายการ`);
-    alert(`บันทึก ${committingBatch.length} รายการเข้า Working Reference เรียบร้อย (เรียงตามลำดับตรวจก่อน-หลัง)`);
-  }catch(e){
-    alert('บันทึกไม่สำเร็จ: ' + e.message);
-  }finally{
-    btn.disabled = false; btn.textContent = originalLabel;
-  }
-}
-
-function parseCheckImportLine(line){
-  let parts = line.split('\t');
-  if(parts.length<2) parts = line.split(',');
-  while(parts.length<6) parts.push('');
-  parts = parts.slice(0,6).map(s=>s.trim());
-  const [code, period, amount, fee, cum, slip] = parts;
-  return {code, period, amount, fee, cum, slip};
-}
-
-function importCheckPaste(){
-  const ta = document.getElementById('check-paste');
-  const lines = ta.value.split('\n').map(l=>l.replace(/\r$/,'')).filter(l=>l.trim()!=='');
-  const resultEl = document.getElementById('check-import-result');
-  if(lines.length===0){
-    resultEl.innerHTML = '<span class="result-err">ไม่มีข้อมูลให้นำเข้า</span>';
-    return;
-  }
-
-  // ถ้าทุกบรรทัดมีค่าเดียว (ไม่มี Tab/Comma คั่นคอลัมน์เลย) ให้ตีความว่าวางมาแบบ
-  // "รหัสลูกค้า / งวดที่ / จำนวนเงิน" สลับกันไปทีละ 3 บรรทัดต่อ 1 รายการ แทนแบบ 1 บรรทัด = 1 แถว
-  const isStacked = lines.every(l => l.indexOf('\t')===-1 && l.indexOf(',')===-1);
-  let added = 0, skipped = 0;
-
-  if(isStacked && lines.length >= 3){
-    for(let i=0; i+2<lines.length; i+=3){
-      checkRows.push({seq: nextSeq(), code: lines[i].trim(), period: lines[i+1].trim(), amount: lines[i+2].trim(), fee:'', cum:'', slip:''});
-      added++;
-    }
-    const remainder = lines.length % 3;
-    if(remainder) skipped = remainder; // บรรทัดท้ายๆ ที่ไม่ครบชุดของ 3 (ขาดค่าไป)
-  } else {
-    lines.forEach(line=>{
-      const row = parseCheckImportLine(line);
-      if(!row.code && !row.period && !row.amount && !row.fee && !row.cum){ skipped++; return; }
-      row.seq = nextSeq();
-      checkRows.push(row);
-      added++;
-    });
-  }
-
-  ta.value = '';
-  resultEl.innerHTML = `<span class="result-ok">นำเข้าสำเร็จ ${added} แถว</span>` + (skipped? ` <span class="result-err">(ข้ามแถวว่าง/ไม่ครบชุด ${skipped} แถว)</span>` : '');
-  saveRows();
-  renderCheckTable();
-  renderDashboard();
 }
 
 function parseImportLine(line){
@@ -1065,16 +966,15 @@ function renderCheckTable(){
     el.innerHTML = '<div class="empty">ไม่พบรายการที่ตรงกับตัวกรอง</div>';
     return;
   }
-  const arrow = col => sortState.col===col ? (sortState.dir===1?' ▲':' ▼') : '';
   let html = `<table><thead><tr>
-    <th class="sortable num" data-col="seq">ลำดับ${arrow('seq')}</th>
-    <th class="sortable" data-col="code">รหัสลูกค้า${arrow('code')}</th>
-    <th class="sortable" data-col="period">งวดที่${arrow('period')}</th>
-    <th class="sortable num" data-col="amount">จำนวนเงิน${arrow('amount')}</th>
-    <th class="sortable num" data-col="fee">ค่าธรรมเนียม${arrow('fee')}</th>
-    <th class="sortable num" data-col="cum">สะสม${arrow('cum')}</th>
-    <th class="sortable num" data-col="slip">ยอดตามสลิป${arrow('slip')}</th>
-    <th class="sortable" data-col="status">ผลการตรวจสอบ${arrow('status')}</th>
+    <th class="num">ลำดับ</th>
+    <th>รหัสลูกค้า</th>
+    <th>งวดที่</th>
+    <th class="num">จำนวนเงิน</th>
+    <th class="num">ค่าธรรมเนียม</th>
+    <th class="num">สะสม</th>
+    <th class="num">ยอดตามสลิป</th>
+    <th>ผลการตรวจสอบ</th>
     <th></th>
   </tr></thead><tbody>`;
   sorted.forEach(({row, i, r})=>{
@@ -1102,14 +1002,6 @@ function renderCheckTable(){
   });
   html += '</tbody></table>';
   el.innerHTML = html;
-  el.querySelectorAll('th.sortable').forEach(th=>{
-    th.addEventListener('click', ()=>{
-      const col = th.dataset.col;
-      if(sortState.col === col){ sortState.dir *= -1; }
-      else { sortState.col = col; sortState.dir = 1; }
-      renderCheckTable();
-    });
-  });
   el.querySelectorAll('.del').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       checkRows.splice(parseInt(btn.dataset.i),1);
@@ -1609,13 +1501,19 @@ async function runBackfillCompare(){
 
   const pastedRows = lines.map(parseBackfillLine);
 
-  // เทียบกับ "รายการวันนี้" (checkRows) ในหน้าตรวจสอบ แทน Working Reference
-  const todayPool = checkRows.map(r=>({
-    code: String(r.code||'').trim(),
-    period: String(r.period||'').trim(),
-    amount: parseFloat(r.amount)||0,
-    used:false
-  })).filter(r=>r.code || r.period || r.amount);
+  // เทียบกับ "รายการวันนี้" (checkRows) เฉพาะแถวที่ผลตรวจถูกต้องเท่านั้น (ถูก/ลูกค้าใหม่/รอครบงวด/
+  // ซ้ำที่ยืนยันแล้ว) — แถวที่มีปัญหา (ซ้ำ, ข้ามงวด, ยอดเกิน ฯลฯ) จะไม่ถูกนำมาเป็นฐานเทียบเลย
+  const validStatuses = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
+  const checkResults = checkRows.map((r,i)=>computeStatus(r,i,checkRows));
+  const todayPool = checkRows
+    .map((r,i)=>({
+      code: String(r.code||'').trim(),
+      period: String(r.period||'').trim(),
+      amount: parseFloat(r.amount)||0,
+      used:false,
+      status: checkResults[i].status
+    }))
+    .filter(r=>(r.code || r.period || r.amount) && validStatuses.includes(r.status));
 
   const matched = [];
   const mismatched = []; // {row, reason, missing?}
@@ -1842,9 +1740,7 @@ document.getElementById('btn-key-order-toggle').addEventListener('click', ()=>{
 });
 document.getElementById('wr-search').addEventListener('input', e=>renderRefTable(WR_DATA,'wr-table','wr-hint', e.target.value));
 document.getElementById('ar-search').addEventListener('input', e=>renderRefTable(AR_DATA,'ar-table','ar-hint', e.target.value));
-document.getElementById('btn-commit').addEventListener('click', commitToWR);
 document.getElementById('btn-import-wr').addEventListener('click', importWRPaste);
-document.getElementById('btn-import-check').addEventListener('click', importCheckPaste);
 document.getElementById('btn-run-fix').addEventListener('click', runFix);
 document.getElementById('btn-archive-closed').addEventListener('click', runArchiveClosed);
 document.getElementById('btn-archive-returned').addEventListener('click', runArchiveReturnedByAmount);
