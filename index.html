@@ -324,6 +324,7 @@
           <option value="รูปแบบงวดไม่ถูกต้อง">รูปแบบงวดไม่ถูกต้อง</option>
           <option value="ไม่พบข้อมูลลูกค้า">ไม่พบข้อมูลลูกค้า</option>
           <option value="ลูกค้าปิดสัญญาแล้ว">ลูกค้าปิดสัญญาแล้ว</option>
+          <option value="เกินจำนวนงวดสัญญา">เกินจำนวนงวดสัญญา</option>
           <option value="งวดนี้จ่ายครบไปแล้ว">งวดนี้จ่ายครบไปแล้ว</option>
           <option value="ค่าธรรมเนียมเพิ่มเติม">ค่าธรรมเนียมเพิ่มเติม</option>
           <option value="สะสมเพิ่มเติม">สะสมเพิ่มเติม</option>
@@ -639,9 +640,27 @@ function skipNote(start, J){
   return '';
 }
 
+// หาข้อมูลสัญญาของรหัสลูกค้า (ถ้าเคยบันทึกไว้ในแท็บ "เทียบ/บันทึกข้อมูลสัญญา") — ใช้ global
+// CONTRACTS_DATA ที่โหลดไว้ตอนเข้าเว็บ คืน null ถ้ายังไม่เคยมีข้อมูลสัญญาของรหัสนี้เลย
+function getContractFor_(code){
+  return CONTRACTS_DATA.find(c=>String(c.code)===String(code)) || null;
+}
+
 function nestedStatus(A, p, C, wr){
   const L = maxCompletedAll(A, wr);
   if(L >= p.start) return {status:'งวดนี้จ่ายครบไปแล้ว', note:`ลูกค้าชำระถึงงวด ${L} แล้ว ตรวจสอบว่าใส่งวด/รหัสลูกค้าผิดหรือไม่`};
+
+  // เช็คกับข้อมูลสัญญา (จำนวนงวดทั้งสัญญาที่ตกลงไว้ตอนเปิดสัญญา) — ถ้ามีข้อมูลสัญญาของรหัสนี้
+  // และงวดที่กำลังตรวจอยู่เกินจำนวนงวดที่สัญญากำหนดไว้ ให้บล็อก/เตือนแรงทันที ไม่ปล่อยผ่านเป็น "ถูก"
+  // เช็คจากงวดสูงสุดที่แถวนี้ครอบคลุมถึง (p.end ถ้าเป็นช่วง, ไม่งั้น p.start) ไม่สนสถานะวงเล็บ
+  const contract = getContractFor_(A);
+  if(contract && contract.months > 0){
+    const reachedPeriod = p.hasDash ? p.end : p.start;
+    if(reachedPeriod > contract.months){
+      return {status:'เกินจำนวนงวดสัญญา', note:`สัญญาของลูกค้ารายนี้กำหนดไว้ ${contract.months} งวด แต่รายการนี้เป็นงวดที่ ${reachedPeriod} — ตรวจสอบว่าใส่งวด/รหัสลูกค้าผิด หรือมีการต่อ/แก้ไขสัญญาโดยไม่ได้อัปเดตข้อมูลสัญญา`};
+    }
+  }
+
   const J = lastOKBefore(A, p.start, wr);
   const I = computeStdAmt(A, wr);
   const K = partSum(A, p.start, wr);
@@ -897,7 +916,7 @@ function pillClass(status){
   const green = ['ถูก','ลูกค้าใหม่','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
   const gray = ['ค่าธรรมเนียมเพิ่มเติม','สะสมเพิ่มเติม','ค่าธรรมเนียม+สะสมเพิ่มเติม'];
   const amber = ['รอครบงวด','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง'];
-  const red = ['ซ้ำ','ซ้ำในรายการตรวจ','งวดนี้จ่ายครบไปแล้ว','ลูกค้าปิดสัญญาแล้ว','ไม่พบข้อมูลลูกค้า'];
+  const red = ['ซ้ำ','ซ้ำในรายการตรวจ','งวดนี้จ่ายครบไปแล้ว','ลูกค้าปิดสัญญาแล้ว','ไม่พบข้อมูลลูกค้า','เกินจำนวนงวดสัญญา'];
   if(green.includes(status)) return 'p-green';
   if(gray.includes(status)) return 'p-gray';
   if(amber.includes(status)) return 'p-amber';
@@ -1100,7 +1119,7 @@ function sumMoney(pairs){
 
 function renderDashboard(){
   const okList = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
-  const issueList = ['ซ้ำ','ซ้ำในรายการตรวจ','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง','ไม่พบข้อมูลลูกค้า','ลูกค้าปิดสัญญาแล้ว'];
+  const issueList = ['ซ้ำ','ซ้ำในรายการตรวจ','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง','ไม่พบข้อมูลลูกค้า','ลูกค้าปิดสัญญาแล้ว','เกินจำนวนงวดสัญญา'];
   const results = checkRows.map((row,i)=>computeStatus(row,i,checkRows));
   const counts = {};
   [...okList, ...issueList].forEach(s=>counts[s]=0);
