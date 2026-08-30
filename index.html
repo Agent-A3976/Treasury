@@ -1467,10 +1467,12 @@ async function confirmMoveToReturned(){
   btn.disabled = true; btn.textContent = 'กำลังย้าย...';
   try{
     const result = await apiGet('moveToReturned', {code});
-    previewEl.innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">ย้าย ${result.rows} แถวของลูกค้า ${code} ไปคืนเครื่องเรียบร้อย</div></div></div>`;
-    logActivity('ย้ายลูกค้าไปคืนเครื่อง', `รหัส ${code} (${result.rows} แถว)`);
+    const contractNote = result.contractCleared ? ' — ล้างข้อมูลสัญญาเดิมของรหัสนี้ออกด้วยแล้ว (พร้อมให้ลูกค้าใหม่ใช้รหัสนี้ต่อได้)' : '';
+    previewEl.innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">ย้าย ${result.rows} แถวของลูกค้า ${code} ไปคืนเครื่องเรียบร้อย</div><div class="sub">${contractNote || 'ไม่มีข้อมูลสัญญาของรหัสนี้ค้างอยู่'}</div></div></div>`;
+    logActivity('ย้ายลูกค้าไปคืนเครื่อง', `รหัส ${code} (${result.rows} แถว)${contractNote}`);
     document.getElementById('return-code-input').value = '';
     WR_DATA = await apiGet('getWR');
+    CONTRACTS_DATA = await apiGet('getContracts');
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     renderDashboard();
   }catch(e){
@@ -1626,18 +1628,20 @@ function parseContractLine(line){
 
 // เทียบ 1 แถวที่วางมากับประวัติจริงใน WR_DATA — คืนสถานะ amount (match/mismatch/no-baseline)
 // และสถานะ months (normal/completed) แยกกัน เพราะเกิดพร้อมกันได้ทั้งคู่
+// พร้อมเช็คว่ารหัสนี้เคยมีข้อมูลสัญญาบันทึกไว้แล้วหรือยัง (กันเผลอวางซ้ำ/เขียนทับโดยไม่รู้ตัว)
 function compareContractRow(row){
   const A = row.code;
+  const existingContract = CONTRACTS_DATA.find(c=>String(c.code)===A) || null;
   const hasHistory = WR_DATA.some(r=>String(r[0])===A);
   if(!hasHistory){
-    return { ...row, hasHistory:false, amountStatus:'no-history', monthsStatus:'no-history', stdAmt:null, maxCompleted:null };
+    return { ...row, hasHistory:false, amountStatus:'no-history', monthsStatus:'no-history', stdAmt:null, maxCompleted:null, existingContract };
   }
   const stdAmt = computeStdAmt(A, WR_DATA); // 0 ถ้าไม่เจอยอดงวดปกติที่ชัดเจน
   const maxCompleted = maxCompletedAll(A, WR_DATA);
   const amountStatus = stdAmt===0 ? 'no-baseline'
     : (Math.abs(stdAmt - row.monthlyAmount) < 0.005 ? 'match' : 'mismatch');
   const monthsStatus = maxCompleted > row.months ? 'completed' : 'normal';
-  return { ...row, hasHistory:true, amountStatus, monthsStatus, stdAmt, maxCompleted };
+  return { ...row, hasHistory:true, amountStatus, monthsStatus, stdAmt, maxCompleted, existingContract };
 }
 
 function contractRowFinalAmount(row){
@@ -1674,6 +1678,7 @@ function renderContractCompare(parseErrors){
   const matchCount = rows.filter(r=>r.amountStatus==='match' && r.monthsStatus==='normal').length;
   const completedCount = rows.filter(r=>r.monthsStatus==='completed').length;
   const newCount = rows.filter(r=>!r.hasHistory).length;
+  const duplicateCount = rows.filter(r=>r.existingContract).length;
 
   let html = '';
   if(parseErrors && parseErrors.length){
@@ -1685,6 +1690,7 @@ function renderContractCompare(parseErrors){
     <div class="chip">ยอดไม่ตรง<span class="chip-val" style="color:var(--amber)">${mismatchCount}</span></div>
     <div class="chip">ครบกำหนดสัญญาแล้ว<span class="chip-val" style="color:var(--red)">${completedCount}</span></div>
     <div class="chip">ยังไม่มีประวัติ<span class="chip-val" style="color:var(--purple)">${newCount}</span></div>
+    <div class="chip">มีสัญญาเดิมอยู่แล้ว (จะถูกเขียนทับ)<span class="chip-val" style="color:var(--amber)">${duplicateCount}</span></div>
   </div>`;
 
   html += `<div class="scroll"><table><thead><tr>
@@ -1698,6 +1704,11 @@ function renderContractCompare(parseErrors){
       if(r.amountStatus==='mismatch') badges.push('<span class="pill p-amber">⚠ ยอดไม่ตรง</span>');
       if(r.amountStatus==='no-baseline') badges.push('<span class="pill p-gray">ยังไม่มียอดงวดปกติชัดเจน</span>');
       if(r.monthsStatus==='completed') badges.push('<span class="pill p-red">🔴 ครบกำหนดสัญญาแล้ว</span>');
+    }
+    let dupNote = '';
+    if(r.existingContract){
+      badges.push('<span class="pill p-amber">⚠ มีสัญญาเดิมอยู่แล้ว</span>');
+      dupNote = `<div class="note" style="color:var(--amber);">เดิมมีสัญญาอยู่แล้ว: ${r.existingContract.months} งวด / ${fmt(r.existingContract.monthlyAmount)} บาท — บันทึกใหม่จะเขียนทับค่านี้</div>`;
     }
     let decisionCell = '';
     if(r.amountStatus==='mismatch'){
@@ -1713,7 +1724,7 @@ function renderContractCompare(parseErrors){
       <td class="num">${fmt(r.monthlyAmount)}</td>
       <td class="num">${r.hasHistory ? (r.stdAmt? fmt(r.stdAmt): '-') : '-'}</td>
       <td class="num">${r.hasHistory ? (r.maxCompleted||0) : '-'}</td>
-      <td>${badges.join(' ')}</td>
+      <td>${badges.join(' ')}${dupNote}</td>
       <td style="white-space:nowrap;">${decisionCell}</td>
     </tr>`;
   });
