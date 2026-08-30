@@ -428,6 +428,15 @@
       </div>
       <div id="backfill-result" style="margin-top:14px;"></div>
     </div>
+    <div class="card accent-purple">
+      <h2><span class="card-icon purple">📄</span>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</h2>
+      <p class="hint" style="margin:0 0 10px;">วางข้อมูล (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) คั่นด้วย Tab หนึ่งบรรทัดต่อหนึ่งคน ระบบจะเทียบกับประวัติจริงใน Working Reference — ยอดที่บันทึกไว้จะใช้เป็นค่าตรวจงวดแรกของลูกค้าใหม่ต่อไป</p>
+      <textarea id="contract-paste" rows="5" placeholder="9	12	2700&#10;2131	10	3200"></textarea>
+      <div style="margin-top:8px;">
+        <button class="primary" id="btn-contract-compare">เทียบข้อมูล</button>
+      </div>
+      <div id="contract-compare-result" style="margin-top:14px;"></div>
+    </div>
     <div class="card">
       <div class="searchrow">
         <input id="wr-search" type="text" placeholder="ค้นหารหัสลูกค้า...">
@@ -509,6 +518,7 @@ const API_SECRET = "hft8Da-_fs8P1AHJHY8fTwF8b2FaTH3v";
 
 let WR_DATA = [];
 let AR_DATA = [];
+let CONTRACTS_DATA = []; // [{code, months, monthlyAmount, updatedAt}] — 1 แถวต่อ 1 รหัสลูกค้า
 
 // Apps Script Web App ไม่ส่ง CORS header กลับมาให้ fetch() อ่าน response ได้โดยตรง
 // (แม้ตั้ง "Anyone" access แล้วก็ตาม) จึงต้องใช้ JSONP สำหรับการอ่านข้อมูล (แทรก <script> แทน fetch)
@@ -1598,6 +1608,154 @@ async function commitBackfillToWR(){
   }
 }
 
+/* ===================== เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ) ===================== */
+// วางข้อมูล 3 ช่อง (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) แล้วเทียบกับประวัติจริงใน
+// Working Reference โดยใช้ฟังก์ชันที่มีอยู่แล้ว (computeStdAmt, maxCompletedAll) ไม่คำนวณซ้ำเอง
+function parseContractLine(line){
+  let parts = line.split('\t');
+  if(parts.length<3) parts = line.split(',');
+  if(parts.length<3) parts = line.trim().split(/\s+/);
+  parts = parts.map(s=>s.trim());
+  if(parts.length<3) return null;
+  const [code, monthsStr, amountStr] = parts;
+  const months = parseInt(String(monthsStr).replace(/,/g,''), 10);
+  const monthlyAmount = parseFloat(String(amountStr).replace(/,/g,''));
+  if(!code || isNaN(months) || isNaN(monthlyAmount)) return null;
+  return { code, months, monthlyAmount };
+}
+
+// เทียบ 1 แถวที่วางมากับประวัติจริงใน WR_DATA — คืนสถานะ amount (match/mismatch/no-baseline)
+// และสถานะ months (normal/completed) แยกกัน เพราะเกิดพร้อมกันได้ทั้งคู่
+function compareContractRow(row){
+  const A = row.code;
+  const hasHistory = WR_DATA.some(r=>String(r[0])===A);
+  if(!hasHistory){
+    return { ...row, hasHistory:false, amountStatus:'no-history', monthsStatus:'no-history', stdAmt:null, maxCompleted:null };
+  }
+  const stdAmt = computeStdAmt(A, WR_DATA); // 0 ถ้าไม่เจอยอดงวดปกติที่ชัดเจน
+  const maxCompleted = maxCompletedAll(A, WR_DATA);
+  const amountStatus = stdAmt===0 ? 'no-baseline'
+    : (Math.abs(stdAmt - row.monthlyAmount) < 0.005 ? 'match' : 'mismatch');
+  const monthsStatus = maxCompleted > row.months ? 'completed' : 'normal';
+  return { ...row, hasHistory:true, amountStatus, monthsStatus, stdAmt, maxCompleted };
+}
+
+function contractRowFinalAmount(row){
+  if(row.amountStatus==='mismatch') return row.decision==='contract' ? row.monthlyAmount : row.stdAmt;
+  if(row.amountStatus==='match') return row.stdAmt;
+  return row.monthlyAmount; // no-history หรือ no-baseline — ไม่มีอะไรให้เทียบ ใช้ค่าที่วางมา
+}
+
+function runContractCompare(){
+  const lines = document.getElementById('contract-paste').value.split('\n').map(l=>l.trim()).filter(l=>l);
+  const resultEl = document.getElementById('contract-compare-result');
+  if(lines.length===0){ resultEl.innerHTML = '<p class="hint" style="color:var(--red);">ไม่มีข้อมูลให้เทียบ</p>'; return; }
+
+  const parseErrors = [];
+  const rows = [];
+  lines.forEach((line, idx)=>{
+    const parsed = parseContractLine(line);
+    if(!parsed){ parseErrors.push(`บรรทัด ${idx+1}: รูปแบบไม่ถูกต้อง (ต้องมี 3 ช่อง: รหัสลูกค้า, จำนวนงวด, ผ่อนเดือนละ)`); return; }
+    rows.push(compareContractRow(parsed));
+  });
+  rows.forEach(r=>{ r.decision = null; }); // ยอดไม่ตรง (mismatch) ต้องให้พนักงานเลือกก่อนถึงจะบันทึกได้
+
+  window._contractCompareRows = rows;
+  renderContractCompare(parseErrors);
+}
+
+function renderContractCompare(parseErrors){
+  const rows = window._contractCompareRows || [];
+  const resultEl = document.getElementById('contract-compare-result');
+  if(rows.length===0){ resultEl.innerHTML = ''; return; }
+
+  const mismatchCount = rows.filter(r=>r.amountStatus==='mismatch').length;
+  const pendingDecisions = rows.filter(r=>r.amountStatus==='mismatch' && !r.decision).length;
+  const matchCount = rows.filter(r=>r.amountStatus==='match' && r.monthsStatus==='normal').length;
+  const completedCount = rows.filter(r=>r.monthsStatus==='completed').length;
+  const newCount = rows.filter(r=>!r.hasHistory).length;
+
+  let html = '';
+  if(parseErrors && parseErrors.length){
+    html += `<div class="status-group-lbl" style="color:var(--red);margin-bottom:6px;">ข้อผิดพลาด ${parseErrors.length} บรรทัด</div>` + parseErrors.slice(0,8).map(e=>`<div class="hint" style="color:var(--red);">${e}</div>`).join('') + `<div style="margin-bottom:14px;"></div>`;
+  }
+
+  html += `<div class="chiprow" style="margin-bottom:14px;">
+    <div class="chip">ตรงกัน<span class="chip-val">${matchCount}</span></div>
+    <div class="chip">ยอดไม่ตรง<span class="chip-val" style="color:var(--amber)">${mismatchCount}</span></div>
+    <div class="chip">ครบกำหนดสัญญาแล้ว<span class="chip-val" style="color:var(--red)">${completedCount}</span></div>
+    <div class="chip">ยังไม่มีประวัติ<span class="chip-val" style="color:var(--purple)">${newCount}</span></div>
+  </div>`;
+
+  html += `<div class="scroll"><table><thead><tr>
+    <th>รหัสลูกค้า</th><th class="num">จำนวนงวด</th><th class="num">ผ่อนเดือนละ (สัญญา)</th><th class="num">ยอดจริงจากประวัติ</th><th class="num">จ่ายครบงวดถึง</th><th>สถานะ</th><th>การตัดสินใจ</th>
+  </tr></thead><tbody>`;
+  rows.forEach((r,i)=>{
+    const badges = [];
+    if(!r.hasHistory) badges.push('<span class="pill p-purple">🆕 ยังไม่มีประวัติ</span>');
+    else {
+      if(r.amountStatus==='match') badges.push('<span class="pill p-green">✓ ยอดตรงกัน</span>');
+      if(r.amountStatus==='mismatch') badges.push('<span class="pill p-amber">⚠ ยอดไม่ตรง</span>');
+      if(r.amountStatus==='no-baseline') badges.push('<span class="pill p-gray">ยังไม่มียอดงวดปกติชัดเจน</span>');
+      if(r.monthsStatus==='completed') badges.push('<span class="pill p-red">🔴 ครบกำหนดสัญญาแล้ว</span>');
+    }
+    let decisionCell = '';
+    if(r.amountStatus==='mismatch'){
+      decisionCell = `
+        <button class="ghost contract-decide" data-i="${i}" data-choice="contract" style="${r.decision==='contract'?'border-color:var(--teal);color:var(--teal);font-weight:700;':''}">ใช้ยอดในสัญญา (${fmt(r.monthlyAmount)})</button>
+        <button class="ghost contract-decide" data-i="${i}" data-choice="history" style="${r.decision==='history'?'border-color:var(--teal);color:var(--teal);font-weight:700;':''}">ใช้ยอดจากประวัติจริง (${fmt(r.stdAmt)})</button>`;
+    } else {
+      decisionCell = '<span class="note">ไม่ต้องเลือก</span>';
+    }
+    html += `<tr>
+      <td>${r.code}</td>
+      <td class="num">${r.months}</td>
+      <td class="num">${fmt(r.monthlyAmount)}</td>
+      <td class="num">${r.hasHistory ? (r.stdAmt? fmt(r.stdAmt): '-') : '-'}</td>
+      <td class="num">${r.hasHistory ? (r.maxCompleted||0) : '-'}</td>
+      <td>${badges.join(' ')}</td>
+      <td style="white-space:nowrap;">${decisionCell}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+
+  if(pendingDecisions>0){
+    html += `<p class="hint" style="color:var(--red);margin-top:10px;">ยังมี ${pendingDecisions} รายการที่ยอดไม่ตรงและยังไม่ได้เลือก — กรุณาเลือกให้ครบก่อนบันทึก</p>`;
+  }
+  html += `<div style="margin-top:14px;"><button class="primary" id="btn-contract-commit" ${pendingDecisions>0?'disabled':''}>บันทึกลงข้อมูลสัญญา (${rows.length} คน)</button></div>`;
+
+  resultEl.innerHTML = html;
+
+  resultEl.querySelectorAll('.contract-decide').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.i,10);
+      window._contractCompareRows[i].decision = btn.dataset.choice;
+      renderContractCompare(parseErrors);
+    });
+  });
+  const commitBtn = document.getElementById('btn-contract-commit');
+  if(commitBtn) commitBtn.addEventListener('click', commitContracts);
+}
+
+async function commitContracts(){
+  const rows = window._contractCompareRows || [];
+  if(!rows.length) return;
+  const btn = document.getElementById('btn-contract-commit');
+  btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+  const payload = rows.map(r=>({ code: r.code, months: r.months, monthlyAmount: contractRowFinalAmount(r) }));
+  try{
+    await apiPost('commitContracts', {rows: payload});
+    CONTRACTS_DATA = await apiGet('getContracts');
+    document.getElementById('contract-paste').value = '';
+    window._contractCompareRows = [];
+    document.getElementById('contract-compare-result').innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">บันทึกข้อมูลสัญญา ${payload.length} คน เรียบร้อย</div></div></div>`;
+    logActivity('บันทึกข้อมูลสัญญา', `${payload.length} คน`);
+  }catch(e){
+    btn.disabled = false; btn.textContent = `บันทึกลงข้อมูลสัญญา (${rows.length} คน)`;
+    alert('บันทึกไม่สำเร็จ: ' + e.message);
+  }
+}
+
 async function runFix(){
   const btn = document.getElementById('btn-run-fix');
   const summaryEl = document.getElementById('fix-summary');
@@ -1749,6 +1907,7 @@ document.getElementById('btn-range-summary').addEventListener('click', loadRange
 document.getElementById('btn-seq-range-summary').addEventListener('click', renderSeqRangeSummary);
 document.getElementById('btn-preview-return').addEventListener('click', previewReturn);
 document.getElementById('btn-backfill-check').addEventListener('click', runBackfillCompare);
+document.getElementById('btn-contract-compare').addEventListener('click', runContractCompare);
 document.getElementById('return-code-input').addEventListener('keydown', e=>{ if(e.key==='Enter') previewReturn(); });
 
 function setConnStatus(state, message){
@@ -1771,9 +1930,10 @@ async function init(){
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
   try{
-    const [wr, ar] = await Promise.all([apiGet('getWR'), apiGet('getArchive')]);
+    const [wr, ar, contracts] = await Promise.all([apiGet('getWR'), apiGet('getArchive'), apiGet('getContracts')]);
     WR_DATA = wr;
     AR_DATA = ar;
+    CONTRACTS_DATA = contracts;
     setConnStatus('connected', `เชื่อมต่อแล้ว — WR ${WR_DATA.length.toLocaleString()} / Archive ${AR_DATA.length.toLocaleString()} แถว`);
   }catch(e){
     console.error('init data load failed:', e);
