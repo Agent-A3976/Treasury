@@ -687,9 +687,34 @@ function nestedStatus(A, p, C, wr){
   }
 
   const J = lastOKBefore(A, p.start, wr);
-  const I = computeStdAmt(A, wr);
+  const stdAmt = computeStdAmt(A, wr);
+  // stdAmt=0 ปกติแปลว่ายังไม่เคยมีประวัติจ่ายจริงเลย (ลูกค้าใหม่จริงๆ ที่ยังไม่มีงวดไหนสมบูรณ์ใน WR)
+  // ถ้ามีข้อมูลสัญญาบันทึกไว้ ใช้ยอดผ่อนเดือนละจากสัญญาเป็นฐานแทน เพื่อตรวจงวดแรกได้ทันที — ใช้ตรรกะ
+  // เดียวกับลูกค้าเก่าทุกกรณี (จ่ายเต็มงวด, จ่ายบางส่วน/สะสมจนครบ, ปิดสัญญาล่วงหน้าแบบมีส่วนลด)
+  const usedContractBaseline = stdAmt===0 && contract && contract.monthlyAmount > 0;
+  const I = usedContractBaseline ? contract.monthlyAmount : stdAmt;
   const K = partSum(A, p.start, wr);
 
+  const result = computePeriodResult_(p, C, I, K, J);
+
+  // ถ้าเทียบกับยอดจากสัญญา (ไม่ใช่ประวัติจริง) ให้ปรับป้ายสถานะกรณีที่ยอดผิดปกติเป็น "ยอดไม่ตรงสัญญา"
+  // แยกออกจากกรณีปกติ เพื่อให้พนักงานรู้ว่านี่คือการเทียบกับข้อมูลสัญญาที่บันทึกไว้ ไม่ใช่ประวัติจ่ายจริง
+  // ("รอครบงวด"/"ข้ามงวด"/"รูปแบบงวดไม่ถูกต้อง" ไม่ต้องปรับ เพราะเป็นสถานะปกติ/ไม่เกี่ยวกับยอดโดยตรง)
+  if(usedContractBaseline){
+    if(result.status==='ถูก'){
+      return {status:'ถูก', note: result.note || 'ยอดตรงตามสัญญา'};
+    }
+    if(result.status==='จำนวนเงินไม่ตรง' || result.status==='ยอดเกิน'){
+      const reason = result.status==='ยอดเกิน' ? 'ยอดที่จ่ายมาเกินกว่าที่คำนวณได้' : (result.note || 'ยอดที่จ่ายมายังไม่ตรงตามที่คำนวณได้');
+      return {status:'ยอดไม่ตรงสัญญา', note:`สัญญากำหนดผ่อนเดือนละ ${fmt(contract.monthlyAmount)} บาท — ${reason}`};
+    }
+  }
+  return result;
+}
+
+// ตรรกะเทียบยอด/งวดหลัก — รับ I (ยอดงวดปกติ) เป็นพารามิเตอร์ตรงๆ แทนที่จะคำนวณเองข้างใน เพื่อให้
+// nestedStatus สลับไปใช้ยอดจากข้อมูลสัญญาแทนได้เวลาที่ยังไม่มีประวัติจริงให้อ้างอิงเลย
+function computePeriodResult_(p, C, I, K, J){
   if(!p.hasDash && p.status===''){
     if(p.start !== J+1) return {status:'ข้ามงวด', note:skipNote(p.start,J)};
     if(K+C === I) return {status:'ถูก', note:''};
@@ -799,21 +824,19 @@ function computeStatus(row, index, allRows, dateOverride){
   if(!inWR){
     if(inAR) return {status:'ลูกค้าปิดสัญญาแล้ว', note:'ลูกค้ารายนี้เคยผ่อนจบไปแล้ว ตรวจสอบว่าเป็นสัญญาใหม่หรือรายการผิดพลาด'};
     if(p.start===1){
-      // งวดแรกจริงๆ ของลูกค้าใหม่ — ไม่มีประวัติใน WR ให้เทียบเลย ปกติระบบจะรับยอดตามที่กรอก
-      // ไปตรงๆ โดยไม่ตรวจสอบอะไร แต่ถ้ามีข้อมูลสัญญา (จากแท็บเทียบ/บันทึกข้อมูลสัญญา) บันทึกไว้แล้ว
-      // ให้เอามาเทียบยอดผ่อนเดือนละทันที ช่วยจับยอดผิดตั้งแต่งวดแรกที่ระบบเดิมตรวจไม่ได้เลย
-      const contract = getContractFor_(A);
-      if(!contract) return {status:'ลูกค้าใหม่', note:'ยังไม่มีข้อมูลสัญญาอ้างอิง'};
-      if(Math.abs(C - contract.monthlyAmount) < 0.005){
-        return {status:'ลูกค้าใหม่', note:`ยอดตรงตามสัญญา (${fmt(contract.monthlyAmount)} บาท)`};
-      }
-      return {status:'ยอดไม่ตรงสัญญา', note:`สัญญากำหนดผ่อนเดือนละ ${fmt(contract.monthlyAmount)} บาท แต่รายการนี้ใส่ ${fmt(C)} บาท`};
+      // งวดแรกจริงๆ ของลูกค้าใหม่ — ไม่มีประวัติใน WR ให้เทียบเลย ถ้าไม่มีข้อมูลสัญญาบันทึกไว้ด้วย
+      // ก็ไม่มีอะไรให้เทียบเลย รับยอดตามที่กรอกไปตรงๆ เหมือนเดิม แต่ถ้ามีข้อมูลสัญญาแล้ว ปล่อยให้ตกไป
+      // เช็คแบบเดียวกับลูกค้าที่มีประวัติด้านล่าง (ผ่าน nestedStatus) ซึ่งจะเอายอดผ่อนเดือนละจากสัญญา
+      // มาใช้แทนยอดจากประวัติจริง — รองรับทั้งจ่ายเต็มงวด จ่ายบางส่วน/สะสมจนครบ และปิดสัญญาล่วงหน้า
+      // แบบมีส่วนลด ด้วยตรรกะชุดเดียวกันกับลูกค้าเก่าทุกกรณี ไม่ต้องเขียนซ้ำ
+      if(!getContractFor_(A)) return {status:'ลูกค้าใหม่', note:'ยังไม่มีข้อมูลสัญญาอ้างอิง'};
+    } else {
+      const hasPeriod1Before = priorRows.some(r=>{
+        const pp = parsePeriod(r.period);
+        return (r.code||'').trim()===A && pp && pp.start===1;
+      });
+      if(!hasPeriod1Before) return {status:'ไม่พบข้อมูลลูกค้า', note:''};
     }
-    const hasPeriod1Before = priorRows.some(r=>{
-      const pp = parsePeriod(r.period);
-      return (r.code||'').trim()===A && pp && pp.start===1;
-    });
-    if(!hasPeriod1Before) return {status:'ไม่พบข้อมูลลูกค้า', note:''};
   }
 
   const effectiveWR = WR_DATA.concat(priorRows.map(r=>{
