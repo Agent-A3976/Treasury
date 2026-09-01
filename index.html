@@ -55,6 +55,11 @@
   nav.tabs{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px;margin-bottom:20px;}
   nav.tabs button{flex:1;border:none;background:transparent;padding:9px 6px;font-size:13.5px;border-radius:7px;cursor:pointer;color:var(--ink-2);font-weight:500;}
   nav.tabs button.active{background:var(--navy);color:#fff;}
+  .wr-subtabs{display:flex;gap:4px;background:var(--gray-l);border-radius:9px;padding:3px;margin-bottom:16px;flex-wrap:wrap;}
+  .wr-subtabs button{border:none;background:transparent;padding:7px 13px;font-size:12.5px;border-radius:7px;cursor:pointer;color:var(--ink-2);font-weight:500;white-space:nowrap;}
+  .wr-subtabs button.active{background:#fff;color:var(--navy);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700;}
+  .wr-subpanel{display:none;}
+  .wr-subpanel.active{display:block;}
   section.panel{display:none;}
   section.panel.active{display:block;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px;}
@@ -407,58 +412,76 @@
   </section>
 
   <section class="panel" id="panel-wr">
-    <div class="card accent-purple">
-      <h2><span class="card-icon purple">⇅</span>เพิ่มข้อมูลเอง (วางจาก Excel)</h2>
-      <p class="hint" style="margin:0 0 8px;">แต่ละแถว: รหัสลูกค้า, งวดที่, จำนวนเงิน, วันที่, เดือน, พ.ศ. — คั่นด้วย Tab (ก็อปจาก Excel วางได้เลย) หนึ่งบรรทัดต่อหนึ่งแถว</p>
-      <textarea id="wr-paste" rows="4" placeholder="9	7	2700	20	กรกฎาคม	2568"></textarea>
-      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <button class="purple" id="btn-import-wr">นำเข้าข้อมูล</button>
-        <span class="note" id="wr-import-result"></span>
+    <div class="wr-subtabs">
+      <button data-wrsub="search" class="active">🔍 ค้นหา/ดูข้อมูล</button>
+      <button data-wrsub="import">📥 นำเข้าข้อมูล</button>
+      <button data-wrsub="contracts">📄 ข้อมูลสัญญา</button>
+      <button data-wrsub="return">↩️ ย้ายคืนเครื่อง</button>
+    </div>
+
+    <div class="wr-subpanel active" id="wr-sub-search">
+      <div class="card">
+        <div class="searchrow">
+          <input id="wr-search" type="text" placeholder="ค้นหารหัสลูกค้า...">
+        </div>
+        <div class="scroll"><table id="wr-table"></table></div>
+        <p class="hint" id="wr-hint"></p>
       </div>
     </div>
-    <div class="card accent-teal">
-      <h2><span class="card-icon teal">⇄</span>เทียบ/เพิ่มข้อมูลย้อนหลังเข้า Working Reference</h2>
-      <p class="hint" style="margin:0 0 10px;">วางข้อมูล (รหัสลูกค้า, งวดที่, จำนวนเงิน) ระบบจะเทียบกับ "รายการวันนี้" ในหน้าตรวจสอบ ว่าตรงกันไหม ขาดอะไร หรือมีอะไรผิดเพี้ยน (ดูแค่รหัส/งวด/จำนวนเงิน ไม่รวมค่าธรรมเนียม) — ถ้าตรงกันครบทุกแถว จะมีปุ่มให้บันทึกลง Working Reference โดยใช้วันที่ที่เลือกด้านล่างนี้</p>
-      <div class="form-row" style="margin-bottom:10px;">
-        <div><label>วัน (ใช้ตอนบันทึกจริง)</label><select id="backfill-day"></select></div>
-        <div><label>เดือน (ใช้ตอนบันทึกจริง)</label><select id="backfill-month"></select></div>
-        <div><label>พ.ศ. (ใช้ตอนบันทึกจริง)</label><select id="backfill-year"></select></div>
+
+    <div class="wr-subpanel" id="wr-sub-import">
+      <div class="card accent-purple">
+        <h2><span class="card-icon purple">⇅</span>เพิ่มข้อมูลเอง (วางจาก Excel)</h2>
+        <p class="hint" style="margin:0 0 8px;">แต่ละแถว: รหัสลูกค้า, งวดที่, จำนวนเงิน, วันที่, เดือน, พ.ศ. — คั่นด้วย Tab (ก็อปจาก Excel วางได้เลย) หนึ่งบรรทัดต่อหนึ่งแถว</p>
+        <textarea id="wr-paste" rows="4" placeholder="9	7	2700	20	กรกฎาคม	2568"></textarea>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="purple" id="btn-import-wr">นำเข้าข้อมูล</button>
+          <span class="note" id="wr-import-result"></span>
+        </div>
       </div>
-      <textarea id="backfill-paste" rows="6" placeholder="2131	5	2190&#10;256	4	2190&#10;2664	5	2190"></textarea>
-      <div style="margin-top:8px;">
-        <button class="primary" id="btn-backfill-check">เทียบข้อมูล</button>
+      <div class="card accent-teal">
+        <h2><span class="card-icon teal">⇄</span>เทียบ/เพิ่มข้อมูลย้อนหลังเข้า Working Reference</h2>
+        <p class="hint" style="margin:0 0 10px;">วางข้อมูล (รหัสลูกค้า, งวดที่, จำนวนเงิน) ระบบจะเทียบกับ "รายการวันนี้" ในหน้าตรวจสอบ ว่าตรงกันไหม ขาดอะไร หรือมีอะไรผิดเพี้ยน (ดูแค่รหัส/งวด/จำนวนเงิน ไม่รวมค่าธรรมเนียม) — ถ้าตรงกันครบทุกแถว จะมีปุ่มให้บันทึกลง Working Reference โดยใช้วันที่ที่เลือกด้านล่างนี้</p>
+        <div class="form-row" style="margin-bottom:10px;">
+          <div><label>วัน (ใช้ตอนบันทึกจริง)</label><select id="backfill-day"></select></div>
+          <div><label>เดือน (ใช้ตอนบันทึกจริง)</label><select id="backfill-month"></select></div>
+          <div><label>พ.ศ. (ใช้ตอนบันทึกจริง)</label><select id="backfill-year"></select></div>
+        </div>
+        <textarea id="backfill-paste" rows="6" placeholder="2131	5	2190&#10;256	4	2190&#10;2664	5	2190"></textarea>
+        <div style="margin-top:8px;">
+          <button class="primary" id="btn-backfill-check">เทียบข้อมูล</button>
+        </div>
+        <div id="backfill-result" style="margin-top:14px;"></div>
       </div>
-      <div id="backfill-result" style="margin-top:14px;"></div>
     </div>
-    <div class="card accent-purple">
-      <h2><span class="card-icon purple">📄</span>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</h2>
-      <p class="hint" style="margin:0 0 10px;">วางข้อมูล (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) คั่นด้วย Tab หนึ่งบรรทัดต่อหนึ่งคน ระบบจะเทียบกับประวัติจริงใน Working Reference — ยอดที่บันทึกไว้จะใช้เป็นค่าตรวจงวดแรกของลูกค้าใหม่ต่อไป</p>
-      <textarea id="contract-paste" rows="5" placeholder="9	12	2700&#10;2131	10	3200"></textarea>
-      <div style="margin-top:8px;">
-        <button class="primary" id="btn-contract-compare">เทียบข้อมูล</button>
+
+    <div class="wr-subpanel" id="wr-sub-contracts">
+      <div class="card accent-purple">
+        <h2><span class="card-icon purple">📄</span>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</h2>
+        <p class="hint" style="margin:0 0 10px;">วางข้อมูล (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) คั่นด้วย Tab หนึ่งบรรทัดต่อหนึ่งคน ระบบจะเทียบกับประวัติจริงใน Working Reference — ยอดที่บันทึกไว้จะใช้เป็นค่าตรวจงวดแรกของลูกค้าใหม่ต่อไป</p>
+        <textarea id="contract-paste" rows="5" placeholder="9	12	2700&#10;2131	10	3200"></textarea>
+        <div style="margin-top:8px;">
+          <button class="primary" id="btn-contract-compare">เทียบข้อมูล</button>
+        </div>
+        <div id="contract-compare-result" style="margin-top:14px;"></div>
       </div>
-      <div id="contract-compare-result" style="margin-top:14px;"></div>
     </div>
-    <div class="card">
-      <div class="searchrow">
-        <input id="wr-search" type="text" placeholder="ค้นหารหัสลูกค้า...">
+
+    <div class="wr-subpanel" id="wr-sub-return">
+      <div class="card">
+        <h2>ย้ายลูกค้าไปคืนเครื่อง</h2>
+        <p class="hint" style="margin:0 0 10px;">พิมพ์รหัสลูกค้าแล้วกดค้นหา ระบบจะดึงประวัติทั้งหมดของลูกค้าคนนั้นมาให้ดูก่อน ยืนยันแล้วค่อยย้ายจริง (ลบออกจาก Working Reference ถาวร)</p>
+        <div class="searchrow">
+          <input id="return-code-input" type="text" placeholder="รหัสลูกค้า เช่น 22923">
+          <button class="ghost" id="btn-preview-return">ค้นหา</button>
+        </div>
+        <div id="return-preview"></div>
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);">
+          <p class="hint" style="margin:0 0 10px;">หรือให้ระบบสแกนหาเองจากช่อง "จำนวนเงิน" ที่มีคำว่า "คืน" ปนอยู่ (เช่น เคยพิมพ์โน้ตว่า "คืนเครื่อง" ไว้ในช่องนี้) แล้วย้ายเฉพาะแถวที่เจอคำนี้จริงๆ (ไม่ย้ายทั้งประวัติของรหัสลูกค้า — กันกรณีรหัสเดิมถูกใช้ซ้ำหลังคืนแล้วซื้อใหม่)</p>
+          <button class="primary" id="btn-archive-returned">▶ สแกนหาคำว่า "คืน" แล้วย้ายทั้งหมด</button>
+        </div>
+        <div class="card" id="archive-returned-result" style="display:none;margin-top:14px;"></div>
       </div>
-      <div class="scroll"><table id="wr-table"></table></div>
-      <p class="hint" id="wr-hint"></p>
-    </div>
-    <div class="card">
-      <h2>ย้ายลูกค้าไปคืนเครื่อง</h2>
-      <p class="hint" style="margin:0 0 10px;">พิมพ์รหัสลูกค้าแล้วกดค้นหา ระบบจะดึงประวัติทั้งหมดของลูกค้าคนนั้นมาให้ดูก่อน ยืนยันแล้วค่อยย้ายจริง (ลบออกจาก Working Reference ถาวร)</p>
-      <div class="searchrow">
-        <input id="return-code-input" type="text" placeholder="รหัสลูกค้า เช่น 22923">
-        <button class="ghost" id="btn-preview-return">ค้นหา</button>
-      </div>
-      <div id="return-preview"></div>
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);">
-        <p class="hint" style="margin:0 0 10px;">หรือให้ระบบสแกนหาเองจากช่อง "จำนวนเงิน" ที่มีคำว่า "คืน" ปนอยู่ (เช่น เคยพิมพ์โน้ตว่า "คืนเครื่อง" ไว้ในช่องนี้) แล้วย้ายเฉพาะแถวที่เจอคำนี้จริงๆ (ไม่ย้ายทั้งประวัติของรหัสลูกค้า — กันกรณีรหัสเดิมถูกใช้ซ้ำหลังคืนแล้วซื้อใหม่)</p>
-        <button class="primary" id="btn-archive-returned">▶ สแกนหาคำว่า "คืน" แล้วย้ายทั้งหมด</button>
-      </div>
-      <div class="card" id="archive-returned-result" style="display:none;margin-top:14px;"></div>
     </div>
   </section>
 
@@ -1860,6 +1883,17 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
     if(btn.dataset.tab==='ar') renderRefTable(AR_DATA,'ar-table','ar-hint', document.getElementById('ar-search').value);
     if(btn.dataset.tab==='admin'){ renderActivityLog(); renderUserManagement(); }
     logActivity('เปิดแท็บ', btn.textContent.trim());
+  });
+});
+
+// แท็บย่อยภายในแท็บ Working Reference — จัดกลุ่ม 4 ส่วน (ค้นหา/นำเข้าข้อมูล/ข้อมูลสัญญา/ย้ายคืนเครื่อง)
+// ให้เห็นทีละกลุ่ม แทนที่จะเรียงการ์ดทั้งหมดยาวเป็นแถวเดียวเหมือนเดิม ลดความรกตา
+document.querySelectorAll('.wr-subtabs button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.wr-subtabs button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.wr-subpanel').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('wr-sub-'+btn.dataset.wrsub).classList.add('active');
   });
 });
 
