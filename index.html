@@ -1027,7 +1027,7 @@ function renderCheckTable(){
     if(r.note) statusCell += `<div class="note">${r.note}</div>`;
     const feeCell = row.fee || (r.status==='ค่าธรรมเนียมเพิ่มเติม' && r.amount ? fmt(r.amount) : '');
     const cumCell = row.cum || (r.status==='สะสมเพิ่มเติม' && r.amount ? fmt(r.amount) : '');
-    const rowClass = pillClass(r.status) === 'p-red' ? ' class="row-issue"' : '';
+    const rowClass = isIssueStatus(r.status) ? ' class="row-issue"' : '';
     html += `<tr${rowClass}>
       <td class="num">${row.seq||''}</td>
       <td>${row.code||''}</td>
@@ -1094,6 +1094,11 @@ let lastCheckResults = []; // ผลตรวจสอบล่าสุดข�
 const COUNTED_STATUSES = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)','ค่าธรรมเนียมเพิ่มเติม','สะสมเพิ่มเติม','ค่าธรรมเนียม+สะสมเพิ่มเติม'];
 function isCountedStatus(status){ return COUNTED_STATUSES.includes(status); }
 
+// สถานะ "ผิดปกติ/ต้องตรวจสอบ" ทั้งหมด — ใช้จุดเดียวทั้งใน Dashboard (กลุ่ม "ต้องตรวจสอบ") และ
+// ตาราง "รายการวันนี้" (ไฮไลต์ทั้งแถวเป็นสีแดง) กันหลุดไม่ตรงกันถ้าแก้จุดหนึ่งแล้วลืมอีกจุด
+const ISSUE_STATUSES = ['ซ้ำ','ซ้ำในรายการตรวจ','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง','ไม่พบข้อมูลลูกค้า','ลูกค้าปิดสัญญาแล้ว','เกินจำนวนงวดสัญญา','ยอดไม่ตรงสัญญา'];
+function isIssueStatus(status){ return ISSUE_STATUSES.includes(status); }
+
 function sumMoney(pairs){
   const okStatuses = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
   const feeOnlyStatuses = ['ค่าธรรมเนียมเพิ่มเติม'];
@@ -1130,7 +1135,7 @@ function sumMoney(pairs){
 
 function renderDashboard(){
   const okList = ['ถูก','ลูกค้าใหม่','รอครบงวด','ซ้ำ (ยืนยันแล้ว)','ซ้ำในรายการตรวจ (ยืนยันแล้ว)'];
-  const issueList = ['ซ้ำ','ซ้ำในรายการตรวจ','ข้ามงวด','จำนวนเงินไม่ตรง','ยอดเกิน','รูปแบบงวดไม่ถูกต้อง','ไม่พบข้อมูลลูกค้า','ลูกค้าปิดสัญญาแล้ว','เกินจำนวนงวดสัญญา','ยอดไม่ตรงสัญญา'];
+  const issueList = ISSUE_STATUSES;
   const results = checkRows.map((row,i)=>computeStatus(row,i,checkRows));
   const counts = {};
   [...okList, ...issueList].forEach(s=>counts[s]=0);
