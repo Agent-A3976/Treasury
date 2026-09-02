@@ -220,6 +220,8 @@
       <select id="reg-branch">
         <option value="surat">สุราษ</option>
         <option value="samui">สมุย</option>
+        <option value="langsuan">หลังสวน</option>
+        <option value="trang">ตรัง</option>
       </select>
       <label>รหัสผ่าน</label>
       <div class="pw-field">
@@ -2080,7 +2082,7 @@ async function init(){
 let currentUser = null; // {userId, nickname, isAdmin, sessionToken, branches: ['surat','samui']}
 
 // สาขาที่กำลังทำงานอยู่ตอนนี้ — จำไว้ใน localStorage กันต้องเลือกใหม่ทุกครั้งที่เปิดเว็บ
-const BRANCH_LABELS = { surat: 'สุราษ', samui: 'สมุย' };
+const BRANCH_LABELS = { surat: 'สุราษ', samui: 'สมุย', langsuan: 'หลังสวน', trang: 'ตรัง' };
 let currentBranch = localStorage.getItem('payment_check_branch') || 'surat';
 function setCurrentBranch(b){
   currentBranch = b;
