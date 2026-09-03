@@ -459,6 +459,14 @@
     </div>
 
     <div class="wr-subpanel" id="wr-sub-contracts">
+      <div class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;">ลูกค้าที่ยังไม่มีข้อมูลสัญญา</h2>
+          <button class="ghost" id="btn-refresh-missing-contracts">↻ ตรวจสอบอีกครั้ง</button>
+        </div>
+        <p class="hint" style="margin:0 0 10px;">เทียบรหัสลูกค้าทั้งหมดใน Working Reference กับข้อมูลสัญญาที่เคยบันทึกไว้ — รหัสไหนมีประวัติผ่อนจริงแต่ยังไม่เคยบันทึกข้อมูลสัญญาเลย จะขึ้นในรายการนี้ (เรียงจากลูกค้าที่มีประวัติเยอะสุดก่อน)</p>
+        <div id="missing-contracts-result"></div>
+      </div>
       <div class="card accent-purple">
         <h2><span class="card-icon purple">📄</span>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</h2>
         <p class="hint" style="margin:0 0 10px;">วางข้อมูล (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) คั่นด้วย Tab หนึ่งบรรทัดต่อหนึ่งคน ระบบจะเทียบกับประวัติจริงใน Working Reference — ยอดที่บันทึกไว้จะใช้เป็นค่าตรวจงวดแรกของลูกค้าใหม่ต่อไป</p>
@@ -1719,6 +1727,47 @@ async function commitBackfillToWR(){
   }
 }
 
+/* ===================== ลูกค้าที่ยังไม่มีข้อมูลสัญญา ===================== */
+// เทียบรหัสลูกค้าที่มีประวัติจริงใน WR_DATA กับรหัสที่เคยบันทึกข้อมูลสัญญาไว้แล้ว (CONTRACTS_DATA)
+// รหัสไหนมีประวัติแต่ไม่มีสัญญา = ต้องไปกรอกเพิ่ม เรียงจากคนที่มีประวัติเยอะสุดก่อน (ผ่อนมานานสุด/
+// active สุด) เพราะน่าจะสำคัญกว่าที่จะรีบเติมข้อมูลสัญญาให้ก่อน
+function renderMissingContracts(){
+  const resultEl = document.getElementById('missing-contracts-result');
+  if(!resultEl) return;
+  const contractCodes = new Set(CONTRACTS_DATA.map(c=>String(c.code)));
+  const countByCode = new Map();
+  WR_DATA.forEach(r=>{
+    const code = String(r[0]);
+    countByCode.set(code, (countByCode.get(code)||0) + 1);
+  });
+  const missing = Array.from(countByCode.entries())
+    .filter(([code])=>!contractCodes.has(code))
+    .sort((a,b)=> b[1]-a[1]); // เรียงจากจำนวนแถวประวัติมากไปน้อย
+
+  if(missing.length===0){
+    resultEl.innerHTML = '<div class="empty">ลูกค้าทุกรหัสใน Working Reference มีข้อมูลสัญญาบันทึกไว้ครบแล้ว</div>';
+    return;
+  }
+  let html = `<p class="note" style="margin:0 0 10px;">พบ ${missing.length.toLocaleString()} รหัสที่ยังไม่มีข้อมูลสัญญา</p>
+    <div class="scroll" style="max-height:320px;"><table><thead><tr><th>รหัสลูกค้า</th><th class="num">จำนวนแถวประวัติใน WR</th><th></th></tr></thead><tbody>`;
+  missing.forEach(([code, count])=>{
+    html += `<tr><td>${code}</td><td class="num">${count}</td><td><button class="ghost btn-fill-contract-code" data-code="${code}">➕ กรอกสัญญา</button></td></tr>`;
+  });
+  html += '</tbody></table></div>';
+  resultEl.innerHTML = html;
+
+  resultEl.querySelectorAll('.btn-fill-contract-code').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const code = btn.dataset.code;
+      const ta = document.getElementById('contract-paste');
+      // เติมรหัสลงช่องวางข้อมูลสัญญาให้เลย (เว้นช่องจำนวนงวด/ยอดไว้ให้กรอกเอง) ต่อท้ายบรรทัดเดิมถ้ามี
+      const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
+      ta.value += `${prefix}${code}\t\t`;
+      ta.focus();
+    });
+  });
+}
+
 /* ===================== เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ) ===================== */
 // วางข้อมูล 3 ช่อง (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) แล้วเทียบกับประวัติจริงใน
 // Working Reference โดยใช้ฟังก์ชันที่มีอยู่แล้ว (computeStdAmt, maxCompletedAll) ไม่คำนวณซ้ำเอง
@@ -1869,6 +1918,7 @@ async function commitContracts(){
     document.getElementById('contract-paste').value = '';
     window._contractCompareRows = [];
     document.getElementById('contract-compare-result').innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">บันทึกข้อมูลสัญญา ${payload.length} คน เรียบร้อย</div></div></div>`;
+    renderMissingContracts();
     logActivity('บันทึกข้อมูลสัญญา', `${payload.length} คน`);
   }catch(e){
     btn.disabled = false; btn.textContent = `บันทึกลงข้อมูลสัญญา (${rows.length} คน)`;
@@ -2040,6 +2090,7 @@ document.getElementById('btn-seq-range-summary').addEventListener('click', rende
 document.getElementById('btn-preview-return').addEventListener('click', previewReturn);
 document.getElementById('btn-backfill-check').addEventListener('click', runBackfillCompare);
 document.getElementById('btn-contract-compare').addEventListener('click', runContractCompare);
+document.getElementById('btn-refresh-missing-contracts').addEventListener('click', renderMissingContracts);
 document.getElementById('return-code-input').addEventListener('keydown', e=>{ if(e.key==='Enter') previewReturn(); });
 
 function setConnStatus(state, message){
@@ -2067,6 +2118,7 @@ async function init(){
     AR_DATA = ar;
     CONTRACTS_DATA = contracts;
     setConnStatus('connected', `เชื่อมต่อแล้ว — WR ${WR_DATA.length.toLocaleString()} / Archive ${AR_DATA.length.toLocaleString()} แถว`);
+    renderMissingContracts();
   }catch(e){
     console.error('init data load failed:', e);
     document.getElementById('check-table').innerHTML = '<div class="empty">เชื่อมต่อฐานข้อมูลไม่สำเร็จ: '+e.message+'</div>';
