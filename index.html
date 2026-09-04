@@ -541,6 +541,15 @@
       </div>
       <div id="activity-log-table"></div>
     </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <h2 style="margin:0;">🔧 ตรวจสอบความสอดคล้อง Logic (หน้าเว็บ vs Backend)</h2>
+        <button class="primary" id="btn-run-logic-check">▶ รันเทียบ</button>
+      </div>
+      <p class="hint" style="margin:0 0 14px;">เครื่องมือสำหรับแอดมิน — รันชุดทดสอบ "งวดที่" ชุดเดียวกันผ่านทั้ง parsePeriod() ที่คำนวณในเบราว์เซอร์ และ parsePeriodGS_() ที่คำนวณใน Apps Script แล้วเทียบผลลัพธ์ว่าตรงกันไหม ใช้เช็คก่อน/หลัง deploy ทุกครั้งที่แก้โค้ดตรรกะงวด ไม่แตะข้อมูลจริงใดๆ ทั้งสิ้น</p>
+      <div id="logic-check-result"></div>
+    </div>
   </section>
 
 </div>
@@ -605,6 +614,27 @@ async function apiPost(action, payload){
 const COLS = ['รหัสลูกค้า','งวดที่','จำนวนเงิน','งวด(ตัวเลข)','ยอดงวดปกติ','จำนวนซ้ำของยอด','งวดที่ผ่านแล้ว','วันที่','เดือน','พ.ศ.','เลขงวด'];
 
 /* ===================== core logic ===================== */
+// ⚠️⚠️ ฟังก์ชันคู่แฝดกับ parsePeriodGS_() ใน Code.gs — ต้องให้ผลลัพธ์ตรงกันทุกกรณีเสมอ!
+// แก้ไฟล์นี้แล้วต้องไปแก้ Code.gs ด้วย (และกลับกัน) ไม่งั้นหน้าเว็บกับ Backend จะตีความ
+// "งวดที่" ไม่ตรงกัน (หน้าเว็บตรวจว่า "ถูก" แต่ Backend คำนวณคอลัมน์ D/E/F/G/K ผิดจากที่ควรจะเป็น)
+// ก่อน deploy ทุกครั้งที่แก้ ให้ไล่เช็คชุดทดสอบนี้กับทั้งสองไฟล์ (หรือใช้เครื่องมือ
+// "ตรวจสอบความสอดคล้อง Logic" ที่แท็บ Admin ซึ่งรันชุดทดสอบเดียวกันนี้เทียบให้อัตโนมัติ):
+//
+//   "7"            → {hasParen:false, hasDash:false, status:'',       start:7, end:7, fmtOK:true}
+//   "5(บางส่วน)"    → {hasParen:true,  hasDash:false, status:'บางส่วน', start:5, end:5, fmtOK:true}
+//   "5(สะสม)"       → {hasParen:true,  hasDash:false, status:'สะสม',   start:5, end:5, fmtOK:true}
+//   "5(ครบ)"        → {hasParen:true,  hasDash:false, status:'ครบ',    start:5, end:5, fmtOK:true}
+//   "5(จบ)"         → {hasParen:true,  hasDash:false, status:'จบ',     start:5, end:5, fmtOK:true}
+//   "3-5"          → {hasParen:false, hasDash:true,  status:'',       start:3, end:5, fmtOK:true}
+//   "3-5(จบ)"       → {hasParen:true,  hasDash:true,  status:'จบ',     start:3, end:5, fmtOK:true}
+//   "3-5(ครบ)"      → fmtOK:false  (ช่วงหลายงวด ห้ามใช้สถานะ "ครบ")
+//   "5-3"          → fmtOK:false  (งวดจบน้อยกว่างวดเริ่ม)
+//   "5-5"          → fmtOK:false  (ช่วงต้องมี end > start จริง ไม่ใช่แค่เท่ากัน)
+//   "0"            → fmtOK:false  (งวดต้องเริ่มจาก 1 ขึ้นไป)
+//   "abc"          → fmtOK:false  (ไม่ใช่ตัวเลข)
+//   "5(แปลกๆ)"      → fmtOK:false  (สถานะในวงเล็บไม่อยู่ในรายการที่รู้จัก)
+//   "5 (บางส่วน)"   → เหมือน "5(บางส่วน)" เป๊ะ (ต้องตัดช่องว่างออกก่อนตีความ)
+//   ""  / null     → คืนค่า null (ไม่ใช่ object)
 function parsePeriod(raw){
   if(raw===null||raw===undefined||raw==='') return null;
   const clean = String(raw).trim().replace(/\s+/g,'');
@@ -2366,6 +2396,67 @@ async function renderUserManagement(){
 }
 
 document.getElementById('btn-refresh-users').addEventListener('click', renderUserManagement);
+
+/* ===================== เครื่องมือ Dev: ตรวจสอบความสอดคล้อง Logic (หน้าเว็บ vs Backend) ===================== */
+// ชุดทดสอบเดียวกับที่ระบุไว้ในคอมเมนต์เหนือ parsePeriod() — ถ้าแก้ไฟล์ใดไฟล์หนึ่งแล้วลืมอีกไฟล์
+// เครื่องมือนี้จะจับได้ทันทีว่าผลลัพธ์เริ่มไม่ตรงกัน
+const LOGIC_CHECK_CASES = [
+  '7', '5(บางส่วน)', '5(สะสม)', '5(ครบ)', '5(จบ)',
+  '3-5', '3-5(จบ)', '3-5(ครบ)', '5-3', '5-5',
+  '0', 'abc', '5(แปลกๆ)', '5 (บางส่วน)', ''
+];
+// ฟิลด์ที่ต้องเทียบ — ไม่รวม "clean" เพราะเป็นแค่ค่ากลางไม่มีผลต่อการตัดสินสถานะ
+const LOGIC_CHECK_FIELDS = ['hasParen','hasDash','base','status','start','end','fmtOK'];
+
+function compareLogicResult_(local, remote){
+  if(local===null && remote===null) return true;
+  if(local===null || remote===null) return false;
+  return LOGIC_CHECK_FIELDS.every(f=> local[f]===remote[f]);
+}
+
+async function runLogicCheck(){
+  const resultEl = document.getElementById('logic-check-result');
+  const btn = document.getElementById('btn-run-logic-check');
+  btn.disabled = true; btn.textContent = 'กำลังรัน...';
+  resultEl.innerHTML = '<div class="empty">กำลังเทียบผลลัพธ์กับ Backend...</div>';
+  try{
+    const rows = await Promise.all(LOGIC_CHECK_CASES.map(async (testCase)=>{
+      const local = parsePeriod(testCase);
+      let remote = null;
+      try{
+        const res = await apiGet('debugParsePeriod', { period: testCase });
+        remote = res.parsed;
+      }catch(e){
+        return { testCase, local, remote: null, error: e.message, match: false };
+      }
+      return { testCase, local, remote, match: compareLogicResult_(local, remote) };
+    }));
+
+    const mismatches = rows.filter(r=>!r.match);
+    const allMatch = mismatches.length===0;
+
+    let html = `<div class="banner ${allMatch?'ok':'bad'}">
+      <div class="icon">${allMatch?'✓':'!'}</div>
+      <div>
+        <div class="title">${allMatch ? `ตรงกันทั้งหมด ${rows.length} เคส` : `ไม่ตรงกัน ${mismatches.length} จาก ${rows.length} เคส!`}</div>
+        <div class="sub">${allMatch ? 'หน้าเว็บกับ Backend ตีความ "งวดที่" เหมือนกันทุกกรณีที่ทดสอบ' : 'ตรวจสอบ parsePeriod() กับ parsePeriodGS_() ด่วน — อาจแก้ไฟล์เดียวแล้วลืมอีกไฟล์'}</div>
+      </div>
+    </div>
+    <div class="scroll" style="margin-top:12px;"><table><thead><tr><th>งวดที่ทดสอบ</th><th>ผลจากหน้าเว็บ</th><th>ผลจาก Backend</th><th>ผล</th></tr></thead><tbody>`;
+    rows.forEach(r=>{
+      const fmtResult = v => v===null ? 'null' : LOGIC_CHECK_FIELDS.map(f=>`${f}=${v[f]}`).join(', ');
+      const rowStyle = r.match ? '' : ' style="background:var(--red-l);"';
+      html += `<tr${rowStyle}><td>"${r.testCase}"</td><td style="font-size:11px;">${fmtResult(r.local)}</td><td style="font-size:11px;">${r.error?('error: '+r.error):fmtResult(r.remote)}</td><td>${r.match?'<span class="pill p-green">ตรงกัน</span>':'<span class="pill p-red">ไม่ตรง</span>'}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+    resultEl.innerHTML = html;
+  }catch(e){
+    resultEl.innerHTML = `<div class="empty">รันไม่สำเร็จ: ${e.message}</div>`;
+  }finally{
+    btn.disabled = false; btn.textContent = '▶ รันเทียบ';
+  }
+}
+document.getElementById('btn-run-logic-check').addEventListener('click', runLogicCheck);
 
 async function renderActivityLog(){
   const el = document.getElementById('activity-log-table');
