@@ -352,7 +352,6 @@
     <div class="card">
       <div class="toolbar">
         <h2 style="margin:0;">สรุปยอดเงิน</h2>
-        <button class="ghost" id="btn-save-daily-report">💾 บันทึกรายงานวันนี้</button>
       </div>
       <div id="dash-money"></div>
       <p class="note" id="daily-report-save-result" style="margin-top:8px;"></p>
@@ -1285,9 +1284,10 @@ async function saveDailyReport(){
   const [y,m,d] = dateVal.split('-').map(Number);
   const day = d, monthName = THAI_MONTHS[m-1], yearBE = y+543;
 
-  const btn = document.getElementById('btn-save-daily-report');
+  // ปุ่มกดเองถูกเอาออกแล้ว (ตอนนี้บันทึกอัตโนมัติตอนกด "บันทึกลง Working Reference" ในการ์ด
+  // เทียบย้อนหลังแทน) เหลือไว้แค่ข้อความสถานะให้เห็นผลลัพธ์
   const resultEl = document.getElementById('daily-report-save-result');
-  btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+  if(resultEl) resultEl.textContent = 'กำลังบันทึกรายงานวันนี้...';
   try{
     const t = lastDashboardTotals;
     const result = await apiGet('saveDailyReport', {
@@ -1297,12 +1297,10 @@ async function saveDailyReport(){
       recordCount: checkRows.length,
       savedBy: currentUser ? currentUser.userId : ''
     });
-    resultEl.textContent = `✓ บันทึกรายงานวันที่ ${result.dateLabel} แล้ว (${result.updated ? 'อัปเดตทับของเดิม' : 'บันทึกใหม่'})`;
+    if(resultEl) resultEl.textContent = `✓ บันทึกรายงานวันที่ ${result.dateLabel} แล้ว (${result.updated ? 'อัปเดตทับของเดิม' : 'บันทึกใหม่'})`;
     logActivity('บันทึกรายงานวันนี้', result.dateLabel);
   }catch(e){
-    resultEl.textContent = `บันทึกไม่สำเร็จ: ${e.message}`;
-  }finally{
-    btn.disabled = false; btn.textContent = '💾 บันทึกรายงานวันนี้';
+    if(resultEl) resultEl.textContent = `บันทึกไม่สำเร็จ: ${e.message}`;
   }
 }
 
@@ -1718,9 +1716,13 @@ async function commitBackfillToWR(){
     await apiPost('commitToWR', {rows: committingBatch});
     committingBatch.forEach(r=>WR_DATA.push(r));
     recomputeF();
-    btn.outerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">บันทึก ${committingBatch.length} แถวเข้า Working Reference เรียบร้อย</div></div></div>`;
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
-    renderDashboard();
+    renderDashboard(); // ต้องเรียกก่อน saveDailyReport เพื่อให้ lastDashboardTotals อัปเดตล่าสุดก่อนบันทึก
+    // บันทึกลง WR สำเร็จแล้ว ถือว่ายืนยันยอดของวันนี้เรียบร้อย เลยบันทึกรายงานประจำวันต่อให้อัตโนมัติ
+    // เลย (เป็นจุดเดียวที่บันทึกรายงานประจำวัน — ปุ่มกดเองแยกต่างหากถูกเอาออกไปแล้ว เพราะ workflow
+    // จริงใช้เครื่องมือเทียบย้อนหลังนี้เป็นขั้นตอนสุดท้ายก่อนล้างรายการทุกวันอยู่แล้ว)
+    await saveDailyReport();
+    btn.outerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">บันทึก ${committingBatch.length} แถวเข้า Working Reference เรียบร้อย</div><div class="sub">บันทึกรายงานประจำวันนี้ให้อัตโนมัติแล้ว</div></div></div>`;
   }catch(e){
     btn.disabled = false; btn.textContent = `บันทึกลง Working Reference (${rows.length} แถว)`;
     alert('บันทึกไม่สำเร็จ: ' + e.message);
@@ -2083,7 +2085,6 @@ document.getElementById('btn-import-wr').addEventListener('click', importWRPaste
 document.getElementById('btn-run-fix').addEventListener('click', runFix);
 document.getElementById('btn-archive-closed').addEventListener('click', runArchiveClosed);
 document.getElementById('btn-archive-returned').addEventListener('click', runArchiveReturnedByAmount);
-document.getElementById('btn-save-daily-report').addEventListener('click', saveDailyReport);
 document.getElementById('btn-range-summary').addEventListener('click', loadRangeSummary);
 document.getElementById('btn-all-time-summary').addEventListener('click', loadAllTimeSummary);
 document.getElementById('btn-seq-range-summary').addEventListener('click', renderSeqRangeSummary);
