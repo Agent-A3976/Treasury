@@ -635,6 +635,11 @@ const COLS = ['รหัสลูกค้า','งวดที่','จำน�
 //   "5(แปลกๆ)"      → fmtOK:false  (สถานะในวงเล็บไม่อยู่ในรายการที่รู้จัก)
 //   "5 (บางส่วน)"   → เหมือน "5(บางส่วน)" เป๊ะ (ต้องตัดช่องว่างออกก่อนตีความ)
 //   ""  / null     → คืนค่า null (ไม่ใช่ object)
+//
+//   หมายเหตุ: เคส "abc" (และเคสอื่นที่ parseFloat ไม่ได้) start/end จะเป็น NaN ฝั่งหน้าเว็บ
+//   แต่ฝั่ง Backend ส่งกลับมาเป็น null เสมอ (JSON ไม่มีค่า NaN ในมาตรฐาน ถูกแปลงอัตโนมัติ)
+//   ถือว่าเป็นค่าเดียวกัน ไม่ใช่ความต่างจริง — เครื่องมือ "ตรวจสอบความสอดคล้อง Logic" ที่แท็บ
+//   Admin เผื่อเคสนี้ไว้แล้ว (ดู compareLogicResult_)
 function parsePeriod(raw){
   if(raw===null||raw===undefined||raw==='') return null;
   const clean = String(raw).trim().replace(/\s+/g,'');
@@ -2411,7 +2416,13 @@ const LOGIC_CHECK_FIELDS = ['hasParen','hasDash','base','status','start','end','
 function compareLogicResult_(local, remote){
   if(local===null && remote===null) return true;
   if(local===null || remote===null) return false;
-  return LOGIC_CHECK_FIELDS.every(f=> local[f]===remote[f]);
+  return LOGIC_CHECK_FIELDS.every(f=>{
+    const lv = local[f], rv = remote[f];
+    // NaN ส่งผ่าน JSON ไม่ได้ (ไม่มีอยู่ในมาตรฐาน JSON) — ฝั่ง Backend จะถูกแปลงเป็น null
+    // เสมอตอนส่งกลับมา ถือว่า NaN (ฝั่งหน้าเว็บ) กับ null (ฝั่ง Backend) เป็นค่าเดียวกัน ไม่ใช่ความต่างจริง
+    if(typeof lv==='number' && isNaN(lv) && rv===null) return true;
+    return lv===rv;
+  });
 }
 
 async function runLogicCheck(){
