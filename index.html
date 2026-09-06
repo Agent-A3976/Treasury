@@ -1313,7 +1313,7 @@ function renderDashboard(){
   `;
 }
 
-async function saveDailyReport(){
+async function saveDailyReport(overrideTotals, overrideRecordCount){
   const dateVal = document.getElementById('check-date').value;
   if(!dateVal){ alert('กรุณาเลือกวันที่ทำรายการก่อน (ที่แท็บตรวจสอบ)'); return; }
   const [y,m,d] = dateVal.split('-').map(Number);
@@ -1324,12 +1324,16 @@ async function saveDailyReport(){
   const resultEl = document.getElementById('daily-report-save-result');
   if(resultEl) resultEl.textContent = 'กำลังบันทึกรายงานวันนี้...';
   try{
-    const t = lastDashboardTotals;
+    // ใช้ยอดที่ผู้เรียกส่งมาให้ (snapshot ก่อน commit) ถ้ามี ไม่งั้นค่อย fallback ไปอ่านค่า
+    // ปัจจุบันจาก state — สำคัญเวลาเรียกจาก commitBackfillToWR() เพราะถ้าปล่อยให้อ่าน
+    // lastDashboardTotals ตอนนั้นตรงๆ จะได้ยอดหลัง commit ซึ่งกลายเป็น "ซ้ำ" ไปหมดแล้ว (ยอด=0)
+    const t = overrideTotals || lastDashboardTotals;
+    const recordCount = overrideRecordCount!==undefined ? overrideRecordCount : checkRows.length;
     const result = await apiGet('saveDailyReport', {
       day, month: monthName, yearBE,
       installTotal: t.installTotal, feeTotal: t.feeTotal, cumTotal: t.cumTotal,
       slipTotal: t.slipTotal, dailyTotal: t.dailyTotal,
-      recordCount: checkRows.length,
+      recordCount,
       savedBy: currentUser ? currentUser.userId : ''
     });
     if(resultEl) resultEl.textContent = `✓ บันทึกรายงานวันที่ ${result.dateLabel} แล้ว (${result.updated ? 'อัปเดตทับของเดิม' : 'บันทึกใหม่'})`;
@@ -1739,6 +1743,14 @@ async function commitBackfillToWR(){
   const monthName = THAI_MONTHS[monthIdx-1];
   const yearBE = parseInt(document.getElementById('backfill-year').value,10);
 
+  // สำคัญ: คำนวณยอดของ "รายการวันนี้" ไว้ก่อน commit เข้า WR เสมอ — เพราะพอ commit ไปแล้ว
+  // ข้อมูลใน WR จะมีแถวที่ตรงกับ checkRows เป๊ะ (รหัส+งวด+ยอด+วันที่ เหมือนกันทุกอย่าง เพราะเป็น
+  // ธุรกรรมเดียวกัน) ทำให้ทุกแถวถูกตีความเป็น "ซ้ำ" ทันทีถ้าคำนวณใหม่หลัง commit (ยอดจะเพี้ยนเป็น 0
+  // ทั้งที่จริงมีอยู่) จึง snapshot ไว้ตรงนี้ก่อน แล้วค่อยส่งยอดชุดนี้ไปบันทึกรายงานหลัง commit เสร็จ
+  const preCommitResults = checkRows.map((row,i)=>computeStatus(row,i,checkRows));
+  const preCommitTotals = sumMoney(checkRows.map((row,i)=>({row, r: preCommitResults[i]})));
+  const preCommitRecordCount = checkRows.length;
+
   const btn = document.getElementById('btn-backfill-commit');
   btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
   const committingBatch = [];
@@ -1752,11 +1764,12 @@ async function commitBackfillToWR(){
     committingBatch.forEach(r=>WR_DATA.push(r));
     recomputeF();
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
-    renderDashboard(); // ต้องเรียกก่อน saveDailyReport เพื่อให้ lastDashboardTotals อัปเดตล่าสุดก่อนบันทึก
+    renderDashboard(); // รีเฟรชหน้าจอให้ตรงกับสถานะล่าสุด (ตอนนี้แถวพวกนี้จะกลายเป็น "ซ้ำ" ถูกต้อง
+                        // แล้ว เพราะมันซ้ำกับที่เพิ่ง commit เข้า WR ไปจริงๆ) — ไม่ใช่ยอดที่จะเอาไปบันทึกรายงาน
     // บันทึกลง WR สำเร็จแล้ว ถือว่ายืนยันยอดของวันนี้เรียบร้อย เลยบันทึกรายงานประจำวันต่อให้อัตโนมัติ
-    // เลย (เป็นจุดเดียวที่บันทึกรายงานประจำวัน — ปุ่มกดเองแยกต่างหากถูกเอาออกไปแล้ว เพราะ workflow
-    // จริงใช้เครื่องมือเทียบย้อนหลังนี้เป็นขั้นตอนสุดท้ายก่อนล้างรายการทุกวันอยู่แล้ว)
-    await saveDailyReport();
+    // เลย โดยใช้ยอดที่ snapshot ไว้ "ก่อน" commit (preCommitTotals) ไม่ใช่ lastDashboardTotals
+    // ปัจจุบัน (ซึ่งตอนนี้เพี้ยนเป็น 0 ไปแล้วจากเหตุผลข้างบน)
+    await saveDailyReport(preCommitTotals, preCommitRecordCount);
     btn.outerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">บันทึก ${committingBatch.length} แถวเข้า Working Reference เรียบร้อย</div><div class="sub">บันทึกรายงานประจำวันนี้ให้อัตโนมัติแล้ว</div></div></div>`;
   }catch(e){
     btn.disabled = false; btn.textContent = `บันทึกลง Working Reference (${rows.length} แถว)`;
