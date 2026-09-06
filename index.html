@@ -55,11 +55,11 @@
   nav.tabs{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px;margin-bottom:20px;}
   nav.tabs button{flex:1;border:none;background:transparent;padding:9px 6px;font-size:13.5px;border-radius:7px;cursor:pointer;color:var(--ink-2);font-weight:500;}
   nav.tabs button.active{background:var(--navy);color:#fff;}
-  .wr-subtabs{display:flex;gap:4px;background:var(--gray-l);border-radius:9px;padding:3px;margin-bottom:16px;flex-wrap:wrap;}
-  .wr-subtabs button{border:none;background:transparent;padding:7px 13px;font-size:12.5px;border-radius:7px;cursor:pointer;color:var(--ink-2);font-weight:500;white-space:nowrap;}
-  .wr-subtabs button.active{background:#fff;color:var(--navy);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700;}
-  .wr-subpanel{display:none;}
-  .wr-subpanel.active{display:block;}
+  .wr-subtabs, .dash-subtabs{display:flex;gap:4px;background:var(--gray-l);border-radius:9px;padding:3px;margin-bottom:16px;flex-wrap:wrap;}
+  .wr-subtabs button, .dash-subtabs button{border:none;background:transparent;padding:7px 13px;font-size:12.5px;border-radius:7px;cursor:pointer;color:var(--ink-2);font-weight:500;white-space:nowrap;}
+  .wr-subtabs button.active, .dash-subtabs button.active{background:#fff;color:var(--navy);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700;}
+  .wr-subpanel, .dash-subpanel{display:none;}
+  .wr-subpanel.active, .dash-subpanel.active{display:block;}
   section.panel{display:none;}
   section.panel.active{display:block;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px;}
@@ -345,71 +345,87 @@
   </section>
 
   <section class="panel" id="panel-dash">
-    <div class="card">
-      <h2>ผลการตรวจสอบวันนี้</h2>
-      <div id="dash-status"></div>
-    </div>
-    <div class="card">
-      <div class="toolbar">
-        <h2 style="margin:0;">สรุปยอดเงิน</h2>
-      </div>
-      <div id="dash-money"></div>
-      <p class="note" id="daily-report-save-result" style="margin-top:8px;"></p>
-    </div>
-    <div class="card">
-      <h2>ตรวจสอบยอดสลิปธนาคาร</h2>
-      <div id="dash-slip"></div>
-      <p class="hint" style="margin-top:8px;">รวมยอดตามสลิปเฉพาะรายการที่ผลตรวจถูกต้อง (ถูก / ลูกค้าใหม่ / รอครบงวด) แล้วเทียบกับยอดรวมประจำวันที่ระบบคำนวณได้</p>
-    </div>
-    <div class="card">
-      <h2>ขนาดข้อมูลใน Working Reference</h2>
-      <div id="dash-capacity"></div>
-    </div>
-    <div class="card accent-teal" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-      <div>
-        <h2 style="margin-bottom:4px;">ย้ายลูกค้าที่ผ่อนจบ</h2>
-        <p class="hint" style="margin:0;">สแกน Working Reference หาลูกค้าที่มีคำว่า "จบ" ในงวดที่ แล้วย้ายประวัติทั้งหมดของลูกค้านั้นไปเก็บที่ Archive</p>
-      </div>
-      <button class="primary" id="btn-archive-closed">▶ ย้ายลูกค้าที่จบ</button>
-    </div>
-    <div class="card" id="archive-closed-result" style="display:none;"></div>
-
-    <div class="card accent-teal">
-      <h2>สรุปยอดตามช่วงลำดับที่ตรวจ</h2>
-      <p class="hint" style="margin:0 0 10px;">เว้นว่างช่องใดช่องหนึ่งหรือทั้งคู่ = รวมทั้งหมด (ดูเลขลำดับได้จากคอลัมน์ "ลำดับ" ในตาราง "รายการวันนี้" — เลขนี้จะรีเซ็ตเป็น 1 ใหม่ก็ต่อเมื่อกด "ล้างรายการทั้งหมด")</p>
-      <div class="searchrow">
-        <div style="flex:1;">
-          <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">จากลำดับที่</label>
-          <input type="number" id="seq-range-from" min="1" placeholder="ไม่ระบุ = ตั้งแต่แถวแรก">
-        </div>
-        <div style="flex:1;">
-          <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ถึงลำดับที่</label>
-          <input type="number" id="seq-range-to" min="1" placeholder="ไม่ระบุ = ถึงแถวสุดท้าย">
-        </div>
-      </div>
-      <button class="primary" id="btn-seq-range-summary">สรุปช่วงนี้</button>
-      <div id="seq-range-result" style="margin-top:14px;"></div>
+    <!-- จัดกลุ่มการ์ด Dashboard เป็น 3 แท็บย่อย (เดิมเรียงยาว 7 การ์ดเห็นพร้อมกันหมด) ตามแนวทาง
+         เดียวกับที่ทำกับ Working Reference: แยกของที่ดูทุกวันตอนปิดยอด ออกจากรายงาน/งานดูแลข้อมูล
+         ที่นาน ๆ ทำที ลดความรกตา -->
+    <div class="dash-subtabs">
+      <button data-dashsub="today" class="active">📋 วันนี้</button>
+      <button data-dashsub="reports">📊 รายงานย้อนหลัง</button>
+      <button data-dashsub="housekeeping">🧰 พื้นที่ &amp; ย้ายลูกค้าจบ</button>
     </div>
 
-    <div class="card accent-teal">
-      <h2>รายงานสรุปตามช่วงวันที่</h2>
-      <p class="hint" style="margin:0 0 10px;">รวมยอดจากรายงานประจำวันที่เคยกด "บันทึกรายงานวันนี้" ไว้ในช่วงที่เลือก</p>
-      <div class="searchrow">
-        <div style="flex:1;">
-          <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ตั้งแต่วันที่</label>
-          <input type="date" id="report-range-from">
-        </div>
-        <div style="flex:1;">
-          <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ถึงวันที่</label>
-          <input type="date" id="report-range-to">
-        </div>
+    <div class="dash-subpanel active" id="dash-sub-today">
+      <div class="card">
+        <h2>ผลการตรวจสอบวันนี้</h2>
+        <div id="dash-status"></div>
       </div>
-      <button class="primary" id="btn-range-summary">สรุปยอด</button>
-      <button class="ghost" id="btn-all-time-summary">📊 ดูยอดทั้งหมด (ทุกวันที่เคยบันทึก)</button>
-      <label id="report-all-branches-wrap" style="display:none;margin-left:12px;font-size:13px;color:var(--ink-2);">
-        <input type="checkbox" id="report-all-branches"> รวมทุกสาขา (แอดมินใหญ่)
-      </label>
-      <div id="report-range-result" style="margin-top:14px;"></div>
+      <div class="card">
+        <div class="toolbar">
+          <h2 style="margin:0;">สรุปยอดเงิน</h2>
+        </div>
+        <div id="dash-money"></div>
+        <p class="note" id="daily-report-save-result" style="margin-top:8px;"></p>
+      </div>
+      <div class="card">
+        <h2>ตรวจสอบยอดสลิปธนาคาร</h2>
+        <div id="dash-slip"></div>
+        <p class="hint" style="margin-top:8px;">รวมยอดตามสลิปเฉพาะรายการที่ผลตรวจถูกต้อง (ถูก / ลูกค้าใหม่ / รอครบงวด) แล้วเทียบกับยอดรวมประจำวันที่ระบบคำนวณได้</p>
+      </div>
+    </div>
+
+    <div class="dash-subpanel" id="dash-sub-reports">
+      <div class="card accent-teal">
+        <h2>สรุปยอดตามช่วงลำดับที่ตรวจ</h2>
+        <p class="hint" style="margin:0 0 10px;">เว้นว่างช่องใดช่องหนึ่งหรือทั้งคู่ = รวมทั้งหมด (ดูเลขลำดับได้จากคอลัมน์ "ลำดับ" ในตาราง "รายการวันนี้" — เลขนี้จะรีเซ็ตเป็น 1 ใหม่ก็ต่อเมื่อกด "ล้างรายการทั้งหมด")</p>
+        <div class="searchrow">
+          <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">จากลำดับที่</label>
+            <input type="number" id="seq-range-from" min="1" placeholder="ไม่ระบุ = ตั้งแต่แถวแรก">
+          </div>
+          <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ถึงลำดับที่</label>
+            <input type="number" id="seq-range-to" min="1" placeholder="ไม่ระบุ = ถึงแถวสุดท้าย">
+          </div>
+        </div>
+        <button class="primary" id="btn-seq-range-summary">สรุปช่วงนี้</button>
+        <div id="seq-range-result" style="margin-top:14px;"></div>
+      </div>
+
+      <div class="card accent-teal">
+        <h2>รายงานสรุปตามช่วงวันที่</h2>
+        <p class="hint" style="margin:0 0 10px;">รวมยอดจากรายงานประจำวันที่เคยกด "บันทึกรายงานวันนี้" ไว้ในช่วงที่เลือก</p>
+        <div class="searchrow">
+          <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ตั้งแต่วันที่</label>
+            <input type="date" id="report-range-from">
+          </div>
+          <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ถึงวันที่</label>
+            <input type="date" id="report-range-to">
+          </div>
+        </div>
+        <button class="primary" id="btn-range-summary">สรุปยอด</button>
+        <button class="ghost" id="btn-all-time-summary">📊 ดูยอดทั้งหมด (ทุกวันที่เคยบันทึก)</button>
+        <label id="report-all-branches-wrap" style="display:none;margin-left:12px;font-size:13px;color:var(--ink-2);">
+          <input type="checkbox" id="report-all-branches"> รวมทุกสาขา (แอดมินใหญ่)
+        </label>
+        <div id="report-range-result" style="margin-top:14px;"></div>
+      </div>
+    </div>
+
+    <div class="dash-subpanel" id="dash-sub-housekeeping">
+      <div class="card">
+        <h2>ขนาดข้อมูลใน Working Reference</h2>
+        <div id="dash-capacity"></div>
+      </div>
+      <div class="card accent-teal" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div>
+          <h2 style="margin-bottom:4px;">ย้ายลูกค้าที่ผ่อนจบ</h2>
+          <p class="hint" style="margin:0;">สแกน Working Reference หาลูกค้าที่มีคำว่า "จบ" ในงวดที่ แล้วย้ายประวัติทั้งหมดของลูกค้านั้นไปเก็บที่ Archive</p>
+        </div>
+        <button class="primary" id="btn-archive-closed">▶ ย้ายลูกค้าที่จบ</button>
+      </div>
+      <div class="card" id="archive-closed-result" style="display:none;"></div>
     </div>
   </section>
 
@@ -2061,6 +2077,17 @@ document.querySelectorAll('.wr-subtabs button').forEach(btn=>{
     document.querySelectorAll('.wr-subpanel').forEach(p=>p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('wr-sub-'+btn.dataset.wrsub).classList.add('active');
+  });
+});
+
+// แท็บย่อยภายในแท็บ Dashboard — จัดกลุ่ม 3 ส่วน (วันนี้ / รายงานย้อนหลัง / พื้นที่&ย้ายลูกค้าจบ)
+// รูปแบบเดียวกับ wr-subtabs ด้านบน แค่คนละกลุ่ม element กัน จึงแยก listener ไว้ต่างหาก
+document.querySelectorAll('.dash-subtabs button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.dash-subtabs button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.dash-subpanel').forEach(p=>p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('dash-sub-'+btn.dataset.dashsub).classList.add('active');
   });
 });
 
