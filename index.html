@@ -1682,7 +1682,7 @@ async function runBackfillCompare(){
     .filter(r=>(r.code || r.period || r.amount) && validStatuses.includes(r.status));
 
   const matched = [];
-  const mismatched = []; // {row, reason, missing?}
+  const mismatched = []; // {row, reason, missing?, extra?}
 
   pastedRows.forEach(row=>{
     const amt = parseFloat(row.amount)||0;
@@ -1693,6 +1693,17 @@ async function runBackfillCompare(){
     let sameCode = todayPool.find(w=>!w.used && w.code===row.code);
     if(sameCode){ mismatched.push({row, reason:`งวดไม่ตรง: ในรายการวันนี้มีงวด "${sameCode.period}" แต่วางมางวด "${row.period}"`}); return; }
     mismatched.push({row, reason:'ไม่พบรหัสลูกค้านี้ในรายการวันนี้เลย', missing:true});
+  });
+
+  // เช็คย้อนกลับ: แถวใน "รายการวันนี้" ที่ไม่ถูกจับคู่กับข้อมูลที่วางมาเลยสักแถว (เช่น 78 แถวในวันนี้
+  // แต่วางมาเทียบแค่ 77 แถว) ถ้าไม่เช็คทางนี้ด้วย แถวที่เหลือจะหายไปเงียบๆ ทำให้เข้าใจผิดว่า "ตรงกันทั้งหมด"
+  const unusedToday = todayPool.filter(w=>!w.used);
+  unusedToday.forEach(w=>{
+    mismatched.push({
+      row: { code: w.code, period: w.period, amount: String(w.amount) },
+      reason: 'มีอยู่ในรายการวันนี้ แต่ไม่พบในข้อมูลที่วางมาเทียบเลย (อาจลืมวางแถวนี้ หรือวางข้อมูลไม่ครบ)',
+      extra: true
+    });
   });
 
   const allGood = mismatched.length===0;
@@ -1708,8 +1719,13 @@ async function runBackfillCompare(){
 
   if(mismatched.length){
     const missingCount = mismatched.filter(m=>m.missing).length;
-    const wrongCount = mismatched.length - missingCount;
-    html += `<div class="status-group-lbl" style="margin-top:14px;color:var(--red);">ขาดหาย/ผิดเพี้ยน (${mismatched.length}${missingCount&&wrongCount?` — ขาดหาย ${missingCount}, ผิดเพี้ยน ${wrongCount}`:''})</div>
+    const extraCount = mismatched.filter(m=>m.extra).length;
+    const wrongCount = mismatched.length - missingCount - extraCount;
+    const parts = [];
+    if(missingCount) parts.push(`ขาดหาย ${missingCount} (วางมาแต่ไม่พบในรายการวันนี้)`);
+    if(extraCount) parts.push(`เกินมา ${extraCount} (มีในรายการวันนี้แต่ไม่พบในข้อมูลที่วางมา)`);
+    if(wrongCount) parts.push(`ผิดเพี้ยน ${wrongCount}`);
+    html += `<div class="status-group-lbl" style="margin-top:14px;color:var(--red);">ขาดหาย/ผิดเพี้ยน (${mismatched.length}${parts.length? ` — ${parts.join(', ')}` : ''})</div>
       <div class="scroll"><table><thead><tr><th>รหัสลูกค้า</th><th>งวดที่</th><th class="num">จำนวนเงิน</th><th>สาเหตุ</th></tr></thead><tbody>`;
     mismatched.forEach(({row,reason})=>{
       html += `<tr style="background:var(--red-l);"><td>${row.code}</td><td>${row.period}</td><td class="num">${row.amount?fmt(parseFloat(row.amount)||0):''}</td><td style="color:var(--red);">${reason}</td></tr>`;
