@@ -580,6 +580,18 @@ let WR_DATA = [];
 let AR_DATA = [];
 let CONTRACTS_DATA = []; // [{code, months, monthlyAmount, updatedAt}] — 1 แถวต่อ 1 รหัสลูกค้า
 
+// บั๊กที่เจอจริง: บางแถวใน Working Reference มีช่องว่างต่อท้ายค่าในคอลัมน์ "งวดที่" (เช่น "4(บางส่วน) "
+// แทนที่จะเป็น "4(บางส่วน)") — น่าจะมาจากการพิมพ์/วางข้อมูลตรงในชีทเอง ทำให้จุดที่เทียบ label แบบ
+// exact string (เช่น partSum() ตอนรวมยอดจ่ายบางส่วน/สะสม) พลาดไม่นับแถวนั้นแบบเงียบๆ — คำนวณยอดขาด
+// ไปโดยไม่มีใคร error ให้เห็น เพราะโค้ดไม่ได้ throw แค่คำนวณผิดเฉยๆ
+// แก้ที่จุดเดียวตรงนี้ (ตัดช่องว่างต้น-ท้ายคอลัมน์ B ทันทีทุกครั้งที่โหลด/โหลดซ้ำ WR_DATA หรือ AR_DATA
+// จาก Google Sheet) แทนที่จะไปไล่แก้ทุกจุดที่เทียบ label — กันพลาดซ้ำถ้ามีจุดเทียบ label ใหม่ในอนาคต
+// ที่ลืมตัดช่องว่างเอง ใช้คู่กับ buildWRRow() ที่ trim ก่อนเขียนแถวใหม่ (กันไม่ให้ช่องว่างหลุดเข้ามาซ้ำ)
+function normalizeRefRows_(rows){
+  (rows||[]).forEach(r=>{ if(typeof r[1]==='string') r[1] = r[1].trim(); });
+  return rows;
+}
+
 // Apps Script Web App ไม่ส่ง CORS header กลับมาให้ fetch() อ่าน response ได้โดยตรง
 // (แม้ตั้ง "Anyone" access แล้วก็ตาม) จึงต้องใช้ JSONP สำหรับการอ่านข้อมูล (แทรก <script> แทน fetch)
 // และใช้ fetch แบบ no-cors (fire-and-forget อ่านผลลัพธ์ไม่ได้) สำหรับการเขียนข้อมูล
@@ -714,7 +726,11 @@ function lastOKBefore(A, start, wr){
 function partSum(A, start, wr){
   let s=0;
   for(const r of wr){
-    if(r[0]==A && (String(r[1])===`${start}(สะสม)` || String(r[1])===`${start}(บางส่วน)`)){ s += (typeof r[2]==='number'? r[2] : 0); }
+    // trim ก่อนเทียบเสมอ แม้ WR_DATA ที่โหลดมาจะถูกทำความสะอาดแล้วที่ normalizeRefRows_() ก็ตาม —
+    // กันไว้อีกชั้นเผื่อมีคนเรียก partSum() ด้วย array อื่นที่ไม่ผ่านการ normalize (เช่นเขียนโค้ดใหม่
+    // ในอนาคตแล้วลืม) ไม่ให้กลับไปเจอบั๊กเดิม (ช่องว่างต่อท้าย label ทำให้เทียบไม่ตรงแบบเงียบๆ)
+    const label = String(r[1]).trim();
+    if(r[0]==A && (label===`${start}(สะสม)` || label===`${start}(บางส่วน)`)){ s += (typeof r[2]==='number'? r[2] : 0); }
   }
   return s;
 }
@@ -959,7 +975,10 @@ function buildWRRow(customerId, periodRaw, amount, day, monthName, yearBE, conte
   const K = computeK(p, D);
   const E = computeE(p, D, K, customerId, amount, context);
   const G = computeG(p);
-  return [String(customerId), String(periodRaw), amount, D, E, null, G, day, monthName, yearBE, K];
+  // trim ก่อนเก็บ (ไม่ใช่แค่ตอนคำนวณ D/E/G/K ผ่าน parsePeriod ซึ่ง trim ภายในอยู่แล้ว) — กันไม่ให้
+  // ช่องว่างต้น-ท้ายที่หลุดมากับ periodRaw ถูกเขียนติดไปกับ label จริงในคอลัมน์ B ของ WR ซ้ำอีก
+  // (บั๊กที่เจอจริง: partSum() เทียบ label แบบ exact string พลาดเพราะมีช่องว่างต่อท้ายติดมา)
+  return [String(customerId), String(periodRaw).trim(), amount, D, E, null, G, day, monthName, yearBE, K];
 }
 
 function parseImportLine(line){
@@ -1547,8 +1566,8 @@ async function runArchiveClosed(){
           </div>
         </div>`;
       logActivity('ย้ายลูกค้าที่จบ', `${result.customers} คน (${result.rows} แถว): ${result.customerList.join(', ')}`);
-      WR_DATA = await apiGet('getWR');
-      AR_DATA = await apiGet('getArchive');
+      WR_DATA = normalizeRefRows_(await apiGet('getWR'));
+      AR_DATA = normalizeRefRows_(await apiGet('getArchive'));
       renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
       renderRefTable(AR_DATA,'ar-table','ar-hint', document.getElementById('ar-search').value);
       renderDashboard();
@@ -1583,7 +1602,7 @@ async function runArchiveReturnedByAmount(){
           </div>
         </div>`;
       logActivity('ย้ายลูกค้าไปคืนเครื่อง (สแกนอัตโนมัติ)', `${result.customers} คน (${result.rows} แถว): ${result.customerList.join(', ')}`);
-      WR_DATA = await apiGet('getWR');
+      WR_DATA = normalizeRefRows_(await apiGet('getWR'));
       renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
       renderDashboard();
     }
@@ -1641,7 +1660,7 @@ async function confirmMoveToReturned(){
     previewEl.innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">ย้าย ${result.rows} แถวของลูกค้า ${code} ไปคืนเครื่องเรียบร้อย</div><div class="sub">${contractNote || 'ไม่มีข้อมูลสัญญาของรหัสนี้ค้างอยู่'}</div></div></div>`;
     logActivity('ย้ายลูกค้าไปคืนเครื่อง', `รหัส ${code} (${result.rows} แถว)${contractNote}`);
     document.getElementById('return-code-input').value = '';
-    WR_DATA = await apiGet('getWR');
+    WR_DATA = normalizeRefRows_(await apiGet('getWR'));
     CONTRACTS_DATA = await apiGet('getContracts');
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     renderDashboard();
@@ -2042,7 +2061,7 @@ async function runFix(){
       logTable.innerHTML = html;
     }
     // แถวใน Working Reference บางส่วนอาจถูกแก้ค่าไปแล้ว — โหลดข้อมูลจริงกลับมาใหม่ให้ตรงกัน
-    WR_DATA = await apiGet('getWR');
+    WR_DATA = normalizeRefRows_(await apiGet('getWR'));
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     renderDashboard();
   }catch(e){
@@ -2206,8 +2225,8 @@ async function init(){
   setConnStatus('connecting');
   try{
     const [wr, ar, contracts] = await Promise.all([apiGet('getWR'), apiGet('getArchive'), apiGet('getContracts')]);
-    WR_DATA = wr;
-    AR_DATA = ar;
+    WR_DATA = normalizeRefRows_(wr);
+    AR_DATA = normalizeRefRows_(ar);
     CONTRACTS_DATA = contracts;
     setConnStatus('connected', `เชื่อมต่อแล้ว — WR ${WR_DATA.length.toLocaleString()} / Archive ${AR_DATA.length.toLocaleString()} แถว`);
     renderMissingContracts();
