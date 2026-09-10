@@ -411,6 +411,23 @@
         </label>
         <div id="report-range-result" style="margin-top:14px;"></div>
       </div>
+
+      <div class="card accent-teal">
+        <h2>ตรวจสอบวันที่ขาดข้อมูลใน Working Reference</h2>
+        <p class="hint" style="margin:0 0 10px;">เช็คจากคอลัมน์วันที่ของทุกแถวใน Working Reference (ข้อมูลอ้างอิงที่ใช้ตรวจสอบยอด) หาวันที่ไม่มีรายการรับชำระเงินบันทึกไว้เลยในช่วงที่เลือก — เว้นว่างทั้งสองช่อง = ใช้ช่วงตั้งแต่วันแรกสุดถึงวันล่าสุดที่มีข้อมูลจริง (วันที่ขึ้นมาไม่ได้แปลว่าผิดปกติเสมอไป อาจเป็นวันที่ร้านปิดก็ได้ ใช้เป็นจุดเริ่มต้นตรวจสอบเท่านั้น)</p>
+        <div class="searchrow">
+          <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ตั้งแต่วันที่</label>
+            <input type="date" id="missing-dates-from">
+          </div>
+          <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:var(--ink-2);margin-bottom:4px;">ถึงวันที่</label>
+            <input type="date" id="missing-dates-to">
+          </div>
+        </div>
+        <button class="primary" id="btn-missing-dates">ตรวจสอบวันที่ขาด</button>
+        <div id="missing-dates-result" style="margin-top:14px;"></div>
+      </div>
     </div>
 
     <div class="dash-subpanel" id="dash-sub-housekeeping">
@@ -1474,6 +1491,94 @@ async function loadAllTimeSummary(){
   }
 }
 
+/* ===================== ตรวจสอบวันที่ขาดข้อมูลใน Working Reference ===================== */
+// แปลง (วันที่, เดือน, พ.ศ.) ของแถว WR หนึ่งแถว (r[7]/r[8]/r[9]) ให้เป็น key วันที่มาตรฐาน
+// "yyyy-mm-dd" (ปี ค.ศ.) ใช้เทียบ/เรียงวันที่ตรงกันเป๊ะไม่ว่าจะมีกี่แถวต่อวัน คืน null ถ้าแปลงไม่ได้
+// (เดือนสะกดผิด/วันที่ไม่ใช่ตัวเลข/วันที่ "ล้น" ไปเดือนอื่นเช่น 31 ในเดือนที่มีแค่ 30 วัน) — ไม่นับ
+// แถวที่ข้อมูลเพี้ยนแบบนี้เป็นวันที่ใช้ได้ กันฟันธงผิดว่า "ขาดข้อมูล" ทั้งที่จริงแค่กรอกวันที่พลาด
+function wrRowDateKey_(r){
+  const day = Number(r[7]);
+  const monthName = String(r[8]||'').trim();
+  const yearBE = Number(r[9]);
+  const mi = THAI_MONTHS.indexOf(monthName);
+  if(!day || mi===-1 || !yearBE) return null;
+  const yearCE = yearBE - 543;
+  const d = new Date(yearCE, mi, day);
+  if(d.getMonth()!==mi || d.getFullYear()!==yearCE || d.getDate()!==day) return null;
+  return d.toISOString().slice(0,10);
+}
+function isoToThaiDate_(iso){
+  const [y,m,d] = iso.split('-').map(Number);
+  return `${d} ${THAI_MONTHS[m-1]} ${y+543}`;
+}
+
+// หาวันที่ "ไม่มีรายการรับชำระเงินบันทึกไว้เลย" ใน Working Reference ภายในช่วง [fromStr, toStr]
+// (รูปแบบ yyyy-mm-dd ปี ค.ศ. ตรงกับ <input type="date">) — ถ้าไม่ระบุช่วงใดช่วงหนึ่งหรือทั้งคู่
+// ใช้ช่วงตั้งแต่วันแรกสุดถึงวันล่าสุดที่มีข้อมูลจริงใน WR แทน (ไม่ต้องรู้ล่วงหน้าว่าเริ่มบันทึกวันไหน)
+function findMissingWRDates_(fromStr, toStr){
+  const present = new Set();
+  WR_DATA.forEach(r=>{
+    const key = wrRowDateKey_(r);
+    if(key) present.add(key);
+  });
+  if(present.size===0) return { missing:[], presentCount:0, dataFrom:null, dataTo:null };
+
+  const sortedPresent = Array.from(present).sort();
+  const dataFrom = sortedPresent[0];
+  const dataTo = sortedPresent[sortedPresent.length-1];
+  const from = fromStr || dataFrom;
+  const to = toStr || dataTo;
+
+  if(from > to) return { missing:[], presentCount:present.size, dataFrom, dataTo, from, to, error:'ช่วงวันที่ไม่ถูกต้อง (วันเริ่มต้นอยู่หลังวันสิ้นสุด)' };
+
+  const missing = [];
+  let cur = new Date(from+'T00:00:00');
+  const end = new Date(to+'T00:00:00');
+  while(cur <= end){
+    const key = cur.toISOString().slice(0,10);
+    if(!present.has(key)) missing.push(key);
+    cur.setDate(cur.getDate()+1);
+  }
+  return { missing, presentCount:present.size, dataFrom, dataTo, from, to };
+}
+
+function renderMissingWRDates(){
+  const fromEl = document.getElementById('missing-dates-from');
+  const toEl = document.getElementById('missing-dates-to');
+  const resultEl = document.getElementById('missing-dates-result');
+  const result = findMissingWRDates_(fromEl.value || null, toEl.value || null);
+
+  if(result.presentCount===0){
+    resultEl.innerHTML = '<div class="empty">ยังไม่มีข้อมูลวันที่ใน Working Reference เลย ไม่สามารถตรวจสอบได้</div>';
+    return;
+  }
+  if(result.error){
+    resultEl.innerHTML = `<div class="empty">${result.error}</div>`;
+    return;
+  }
+  // เติมช่องวันที่ให้อัตโนมัติถ้ายังไม่เคยเลือกเอง (ใช้ช่วงที่มีข้อมูลจริงเป็นค่าเริ่มต้น) ให้เห็นชัดว่าตรวจช่วงไหนอยู่
+  if(!fromEl.value) fromEl.value = result.from;
+  if(!toEl.value) toEl.value = result.to;
+
+  const totalDays = Math.round((new Date(result.to+'T00:00:00') - new Date(result.from+'T00:00:00'))/86400000) + 1;
+  const hasMissing = result.missing.length > 0;
+  let html = `<div class="banner ${hasMissing?'bad':'ok'}">
+    <div class="icon">${hasMissing?'!':'✓'}</div>
+    <div>
+      <div class="title">${hasMissing ? `ขาดข้อมูล ${result.missing.length} วัน จากทั้งหมด ${totalDays} วันในช่วงนี้` : `มีข้อมูลครบทุกวันในช่วงนี้ (${totalDays} วัน)`}</div>
+      <div class="sub">ข้อมูลจริงใน Working Reference มีตั้งแต่ ${isoToThaiDate_(result.dataFrom)} ถึง ${isoToThaiDate_(result.dataTo)} — วันที่ขึ้นในรายการด้านล่างแปลว่า "ไม่มีแถวไหนใน WR ตรงวันนั้นเลย" เท่านั้น ไม่ได้แปลว่าผิดปกติเสมอไป อาจเป็นวันที่ร้านปิดหรือไม่มีลูกค้าจ่ายเงินจริง ๆ ก็ได้ ใช้เป็นจุดเริ่มต้นไล่ตรวจสอบเท่านั้น</div>
+    </div>
+  </div>`;
+  if(hasMissing){
+    html += '<div class="scroll" style="max-height:320px;"><table><thead><tr><th class="num">#</th><th>วันที่ขาดข้อมูล</th></tr></thead><tbody>';
+    result.missing.forEach((iso,idx)=>{
+      html += `<tr><td class="num">${idx+1}</td><td>${isoToThaiDate_(iso)}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+  resultEl.innerHTML = html;
+}
+
 /* ===================== WR / AR viewer ===================== */
 function renderRefTable(data, tableId, hintId, filter){
   const q = (filter||'').trim();
@@ -2178,6 +2283,7 @@ document.getElementById('btn-archive-closed').addEventListener('click', runArchi
 document.getElementById('btn-archive-returned').addEventListener('click', runArchiveReturnedByAmount);
 document.getElementById('btn-range-summary').addEventListener('click', loadRangeSummary);
 document.getElementById('btn-all-time-summary').addEventListener('click', loadAllTimeSummary);
+document.getElementById('btn-missing-dates').addEventListener('click', renderMissingWRDates);
 document.getElementById('btn-seq-range-summary').addEventListener('click', renderSeqRangeSummary);
 document.getElementById('btn-preview-return').addEventListener('click', previewReturn);
 document.getElementById('btn-backfill-check').addEventListener('click', runBackfillCompare);
