@@ -1497,7 +1497,9 @@ async function loadAllTimeSummary(){
 function renderRefTable(data, tableId, hintId, filter){
   const q = (filter||'').trim();
   let rows = data;
-  if(q) rows = data.filter(r=>String(r[0]).includes(q));
+  // เทียบแบบตรงเป๊ะ (exact match) ไม่ใช่ "มีคำนี้อยู่ในรหัส" (contains) — เดิมพิมพ์ "5" แล้วเจอ
+  // "252", "325", "2500" ปนมาด้วยเพราะมันมีเลข 5 อยู่ในตัวเลขนั้น ทั้งที่ผู้ใช้อยากเห็นเฉพาะรหัส "5" ตรงๆ
+  if(q) rows = data.filter(r=>String(r[0]).trim() === q);
   const shown = rows.slice(-200);
   const el = document.getElementById(tableId);
   let html = '<thead><tr>'+COLS.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>';
@@ -1507,8 +1509,8 @@ function renderRefTable(data, tableId, hintId, filter){
   html += '</tbody>';
   el.innerHTML = html;
   document.getElementById(hintId).textContent = q
-    ? `พบ ${rows.length.toLocaleString()} แถว (แสดง 200 แถวล่างสุด)`
-    : `ทั้งหมด ${data.length.toLocaleString()} แถว — พิมพ์รหัสลูกค้าเพื่อค้นหา (แสดง 200 แถวล่างสุด)`;
+    ? `พบ ${rows.length.toLocaleString()} แถว ของรหัส "${q}" (แสดง 200 แถวล่างสุด)`
+    : `ทั้งหมด ${data.length.toLocaleString()} แถว — พิมพ์รหัสลูกค้าให้ตรงเป๊ะเพื่อค้นหา (แสดง 200 แถวล่างสุด)`;
 }
 
 /* ===================== persistence ===================== */
