@@ -1528,21 +1528,25 @@ async function saveRows(){
     setConnStatus('error', e.message);
   }
 }
+// แปลงข้อมูลดิบจาก getCheckToday ให้เป็นรูปแบบที่ checkRows ใช้ — แยกเป็นฟังก์ชันกลาง เพื่อให้
+// init() เรียกใช้กับผลลัพธ์ที่ยิงพร้อมกับ getWR/getArchive/getContracts ได้เลย (ดู init() ด้านล่าง)
+// แทนที่จะต้องรอ 3 อันนั้นเสร็จก่อนแล้วค่อยมายิง getCheckToday ต่อแบบเรียงคิวเหมือนเดิม
+function applyCheckToday_(raw){
+  checkRows = raw.map(r => ({
+    seq: (r.seq===null||r.seq===undefined||r.seq==='') ? 0 : Number(r.seq),
+    code: r.code===null||r.code===undefined ? '' : String(r.code),
+    period: r.period===null||r.period===undefined ? '' : String(r.period),
+    amount: r.amount===null||r.amount===undefined ? '' : String(r.amount),
+    fee: r.fee===null||r.fee===undefined ? '' : String(r.fee),
+    cum: r.cum===null||r.cum===undefined ? '' : String(r.cum),
+    slip: r.slip===null||r.slip===undefined ? '' : String(r.slip),
+    confirmDup: r.confirmDup===true||r.confirmDup==='1'||r.confirmDup===1
+  }));
+}
 async function loadRows(){
   try{
     const raw = await apiGet('getCheckToday');
-    // Google Sheets อาจอ่านค่ากลับมาเป็นตัวเลข (number) แทนสตริง ถ้าเซลล์ถูกตีความเป็นตัวเลข
-    // แปลงทุกช่องเป็นสตริงเสมอ ป้องกัน .trim() พังตอนใช้งานค่าพวกนี้
-    checkRows = raw.map(r => ({
-      seq: (r.seq===null||r.seq===undefined||r.seq==='') ? 0 : Number(r.seq),
-      code: r.code===null||r.code===undefined ? '' : String(r.code),
-      period: r.period===null||r.period===undefined ? '' : String(r.period),
-      amount: r.amount===null||r.amount===undefined ? '' : String(r.amount),
-      fee: r.fee===null||r.fee===undefined ? '' : String(r.fee),
-      cum: r.cum===null||r.cum===undefined ? '' : String(r.cum),
-      slip: r.slip===null||r.slip===undefined ? '' : String(r.slip),
-      confirmDup: r.confirmDup===true||r.confirmDup==='1'||r.confirmDup===1
-    }));
+    applyCheckToday_(raw);
   }catch(e){ checkRows = []; console.error('loadRows failed:', e); }
 }
 
@@ -2226,10 +2230,21 @@ async function init(){
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
   try{
-    const [wr, ar, contracts] = await Promise.all([apiGet('getWR'), apiGet('getArchive'), apiGet('getContracts')]);
+    // เดิมยิง WR/Archive/Contracts พร้อมกัน แล้วค่อยรอเสร็จก่อนไปยิง CheckToday ต่อแบบเรียงคิว
+    // ทั้งที่เป็นคนละชีทกัน ไม่ต้องรออะไรกันเลย — รวมยิงพร้อมกันทีเดียวทั้ง 4 คำขอแทน ตัดเวลารอ
+    // round-trip ที่ 4 ออกไปได้เต็มๆ 1 รอบ มีผลชัดเจนตอนสลับสาขา เพราะทุกคำขอนี้ผูกกับ currentBranch
+    // ต้องโหลดใหม่ทั้งหมดทุกครั้งที่สลับ (ใส่ .catch ให้ getCheckToday เองเพื่อให้ยังไม่ fatal เหมือนเดิม
+    // ถ้าพลาดแค่ตัวนี้ตัวเดียว — ตัวอื่นยังต้องพังจริงถึงจะถือว่า fatal เหมือนพฤติกรรมเดิม)
+    const [wr, ar, contracts, checkToday] = await Promise.all([
+      apiGet('getWR'),
+      apiGet('getArchive'),
+      apiGet('getContracts'),
+      apiGet('getCheckToday').catch(e=>{ console.error('getCheckToday failed:', e); return []; })
+    ]);
     WR_DATA = normalizeRefRows_(wr);
     AR_DATA = normalizeRefRows_(ar);
     CONTRACTS_DATA = contracts;
+    applyCheckToday_(checkToday);
     setConnStatus('connected', `เชื่อมต่อแล้ว — WR ${WR_DATA.length.toLocaleString()} / Archive ${AR_DATA.length.toLocaleString()} แถว`);
     renderMissingContracts();
   }catch(e){
@@ -2238,7 +2253,6 @@ async function init(){
     setConnStatus('error', e.message);
     return;
   }
-  await loadRows();
   renderCheckTable();
   renderDashboard();
 }
