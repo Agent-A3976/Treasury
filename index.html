@@ -654,12 +654,20 @@ function jsonp_(url){
   });
 }
 
+// หน่วงเวลาสั้นๆ ระหว่างคำขอที่ยิงต่อเนื่องกัน เพื่อไม่ให้ Apps Script มองว่าถูกยิงถี่เกินไป
+function sleep_(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
 async function apiGet(action, extraParams){
   const params = new URLSearchParams({ action, secret: API_SECRET, branch: currentBranch, ...(extraParams||{}) });
   const url = `${API_URL}?${params.toString()}`;
   let lastErr;
-  // ปัญหาชั่วคราว (Apps Script ตอบช้า/hiccup ชั่วครู่) มักหายไปถ้าลองใหม่ — ลองสูงสุด 3 ครั้งก่อนยอมแพ้
-  for(let attempt=1; attempt<=3; attempt++){
+  // ลองสูงสุด 4 ครั้ง โดยรอนานขึ้นเรื่อยๆ ก่อนลองใหม่ (2 → 5 → 9 วินาที บวกเวลาสุ่มอีกเล็กน้อย)
+  // เดิมรอแค่ 0.8 กับ 1.6 วินาที ซึ่งสั้นเกินไปสำหรับกรณีที่โดน Apps Script กั้นคำขอ (rate limit)
+  // กลายเป็นยิงซ้ำกระหน่ำตอนที่เขากั้นอยู่พอดี ยิ่งทำให้ถูกกั้นนานขึ้น
+  // เวลาสุ่ม (jitter) สำคัญตอนมีพนักงานหลายคน/หลายแท็บเปิดพร้อมกัน — ถ้าทุกเครื่องรอเท่ากันเป๊ะ
+  // มันจะยิงซ้ำพร้อมกันอีกรอบแล้วพังพร้อมกันซ้ำๆ การสุ่มช่วยกระจายจังหวะให้เหลื่อมกัน
+  const MAX_ATTEMPTS = 4;
+  for(let attempt=1; attempt<=MAX_ATTEMPTS; attempt++){
     try{
       const json = await jsonp_(url);
       if(!json.ok) throw new Error(json.error || "API error");
@@ -667,7 +675,10 @@ async function apiGet(action, extraParams){
     }catch(e){
       lastErr = e;
       console.warn(`apiGet(${action}) ครั้งที่ ${attempt} ไม่สำเร็จ:`, e.message);
-      if(attempt<3) await new Promise(r=>setTimeout(r, 800*attempt));
+      if(attempt < MAX_ATTEMPTS){
+        const waitMs = (attempt*attempt*1000) + 1000 + Math.floor(Math.random()*1000);
+        await sleep_(waitMs);
+      }
     }
   }
   throw lastErr;
@@ -2288,17 +2299,14 @@ async function init(){
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
   try{
-    // เดิมยิง WR/Archive/Contracts พร้อมกัน แล้วค่อยรอเสร็จก่อนไปยิง CheckToday ต่อแบบเรียงคิว
-    // ทั้งที่เป็นคนละชีทกัน ไม่ต้องรออะไรกันเลย — รวมยิงพร้อมกันทีเดียวทั้ง 4 คำขอแทน ตัดเวลารอ
-    // round-trip ที่ 4 ออกไปได้เต็มๆ 1 รอบ มีผลชัดเจนตอนสลับสาขา เพราะทุกคำขอนี้ผูกกับ currentBranch
-    // ต้องโหลดใหม่ทั้งหมดทุกครั้งที่สลับ (ใส่ .catch ให้ getCheckToday เองเพื่อให้ยังไม่ fatal เหมือนเดิม
-    // ถ้าพลาดแค่ตัวนี้ตัวเดียว — ตัวอื่นยังต้องพังจริงถึงจะถือว่า fatal เหมือนพฤติกรรมเดิม)
-    const [wr, ar, contracts, checkToday] = await Promise.all([
-      apiGet('getWR'),
-      apiGet('getArchive'),
-      apiGet('getContracts'),
-      apiGet('getCheckToday').catch(e=>{ console.error('getCheckToday failed:', e); return []; })
-    ]);
+    // ยิงทีละคำขอ ไม่ยิงพร้อมกัน — เคยลองยิงพร้อมกันทั้ง 4 ตัวเพื่อความเร็ว แต่พบว่า Apps Script
+    // กั้นคำขอ (rate limit) เมื่อถูกยิงถี่เกินไปในเวลาสั้นๆ ทำให้ "เชื่อมต่อไม่สำเร็จ" เป็นประจำ
+    // ทั้งตอนเปิดเว็บและตอนสลับสาขา — ยอมช้าขึ้นเล็กน้อยแลกกับการที่ใช้งานได้จริงทุกครั้ง
+    // (ของที่เร็วแต่เชื่อมต่อไม่ติดบ่อยๆ ไม่มีประโยชน์กับงานหน้าร้าน)
+    const wr = await apiGet('getWR');
+    const ar = await apiGet('getArchive');
+    const contracts = await apiGet('getContracts');
+    const checkToday = await apiGet('getCheckToday').catch(e=>{ console.error('getCheckToday failed:', e); return []; });
     WR_DATA = normalizeRefRows_(wr);
     AR_DATA = normalizeRefRows_(ar);
     CONTRACTS_DATA = contracts;
@@ -2375,15 +2383,27 @@ function enterApp(user){
   }
 
   logActivity('เปิดเว็บ', `สาขา ${BRANCH_LABELS[currentBranch]||currentBranch}`);
-  pingLoop_(); // อัปเดต "ใช้งานล่าสุด" ทันทีตอนเข้าแอป แล้วตั้งเวลาอัปเดตซ้ำเป็นระยะ
+  pingLoop_(); // ตั้งเวลาอัปเดต "ใช้งานล่าสุด" เป็นระยะ (ครั้งแรกหน่วง 30 วิ ให้พ้นช่วงโหลดข้อมูลก่อน)
   init();
 }
 
 // อัปเดตเวลาใช้งานล่าสุดของบัญชีนี้เป็นระยะ ให้หน้าแอดมิน "จัดการผู้ใช้" คำนวณว่าใครออนไลน์อยู่ได้
+// รอ 30 วินาทีก่อนยิงครั้งแรก ไม่ให้ไปชนกับจังหวะโหลดข้อมูลตอนเปิดเว็บ/สลับสาขา ซึ่งเป็นช่วงที่
+// คำขอหนาแน่นที่สุดและเสี่ยงโดน Apps Script กั้นมากที่สุด — ping เป็นข้อมูลไม่สำคัญ (แค่เวลาออนไลน์)
+// ยอมให้ช้าหรือพลาดไปบ้างได้ ไม่ควรไปแย่งโควต้ากับการโหลดข้อมูลจริงที่พนักงานรอใช้งานอยู่
 function pingLoop_(){
+  scheduleNextPing_(30000);   // ครั้งแรกรอ 30 วิ ให้พ้นช่วงโหลดข้อมูลก่อน
+}
+function scheduleNextPing_(delayMs){
   if(!currentUser) return;
-  apiGet('ping', { sessionToken: currentUser.sessionToken }).catch(()=>{});
-  setTimeout(pingLoop_, 120000); // ทุก 2 นาที
+  setTimeout(()=>{
+    if(!currentUser) return;
+    // ping ไม่ต้อง retry เลย (ยิงตรงผ่าน jsonp_ ไม่ผ่าน apiGet) — พลาดรอบนี้เดี๋ยวอีก 2 นาทีก็ยิงใหม่
+    // ไม่มีเหตุผลให้ไปเพิ่มจำนวนคำขอตอนที่ระบบกำลังติดขัดอยู่แล้ว
+    const params = new URLSearchParams({ action:'ping', secret: API_SECRET, branch: currentBranch, sessionToken: currentUser.sessionToken });
+    jsonp_(`${API_URL}?${params.toString()}`).catch(()=>{});
+    scheduleNextPing_(120000); // ครั้งต่อๆ ไปทุก 2 นาทีเท่าเดิม
+  }, delayMs);
 }
 
 async function switchBranch(newBranch){
