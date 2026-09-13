@@ -685,14 +685,99 @@ async function apiGet(action, extraParams){
 }
 
 async function apiPost(action, payload){
-  // mode:no-cors แปลว่าอ่าน response กลับมาไม่ได้ (opaque) — เขียนแบบยิงแล้วไม่รอผลยืนยันจาก server
-  // โค้ดฝั่งเรียกใช้จึงควร apiGet ซ้ำอีกทีถ้าจำเป็นต้องมั่นใจว่าเขียนสำเร็จจริง
+  // mode:no-cors แปลว่าอ่าน response กลับมาไม่ได้ (opaque) — Apps Script Web App ไม่ส่ง
+  // Access-Control-Allow-Origin กลับมาไม่ว่าจะตั้งค่า deploy เป็นอะไรก็ตาม เบราว์เซอร์เลยบล็อกไม่ให้
+  // อ่าน response ได้เลยถ้าใช้ fetch ปกติ (ต่างจาก JSONP ที่ apiGet ใช้ ซึ่งหลบ CORS ได้เพราะเป็น
+  // <script> tag ไม่ใช่ fetch) — เซิร์ฟเวอร์ฝั่ง Code6.gs ยังคงตอบ {ok,data} กลับมาให้จริงทุกครั้ง
+  // (ดู doPost) เราแค่มองไม่เห็นเฉยๆ ทำให้ไม่มีทางรู้เลยว่าคำขอเขียนสำเร็จหรือพัง
+  //
+  // ผลคือถ้ายิงตอนโดน rate limit พอดี (เช่นเดียวกับที่ apiGet เจอ) จะดูเหมือนสำเร็จเสมอทั้งที่จริง
+  // ข้อมูลไม่ถูกเขียนเลย — อันตรายมากสำหรับระบบการเงิน เพราะข้อมูลจ่ายเงินจะหายไปเงียบๆ โดยไม่มี
+  // ใครรู้ตัว จึงห้ามใช้ apiPost() ตรงๆ แล้วถือว่าจบ ทุกจุดที่เขียนข้อมูลสำคัญต้องเรียกผ่านฟังก์ชัน
+  // "...Verified_" ด้านล่างนี้แทน ซึ่งจะอ่านข้อมูลกลับมาเช็คจริงว่าสิ่งที่ส่งไปมีอยู่ในชีทหรือไม่
   await fetch(API_URL, {
     method: "POST",
     mode: "no-cors",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
     body: JSON.stringify({ action, secret: API_SECRET, branch: currentBranch, ...(payload||{}) })
   });
+}
+
+/* =========================================================================
+ * เขียนแล้วอ่านกลับมาเช็คซ้ำ (write-then-verify) — ชดเชยที่ apiPost อ่านผลจริงไม่ได้
+ *
+ * commitToWR_ ฝั่ง backend เป็นการ "ต่อท้ายแถวใหม่" เท่านั้น (append) ถ้าเช็คแล้วไม่เจอแถวที่
+ * ส่งไปจริง แปลว่ายังไม่เคยเขียนสำเร็จเลย จึงส่งซ้ำได้อย่างปลอดภัย (จะไม่มีทางเขียนซ้ำสอง เพราะ
+ * ถ้าเช็คแล้ว "เจอ" ก็จะไม่ส่งซ้ำอยู่แล้ว) แต่ถ้าขั้นตอน "เช็ค" เองอ่านข้อมูลไม่ได้เลย (เน็ต/เซิร์ฟเวอร์
+ * มีปัญหาหนัก) จะไม่เดาแล้วส่งซ้ำ เพราะถ้ารอบแรกดันสำเร็จจริงอยู่แล้ว การส่งซ้ำจะทำให้ข้อมูลซ้ำสอง
+ * (นับเงินซ้ำ) — กรณีนี้จะแจ้งผู้ใช้ตรงๆ ว่าตรวจสอบไม่ได้ ให้ไปเช็คเองก่อน ไม่ใช่เดาแล้วยิงซ้ำ
+ * ========================================================================= */
+function rowMatchesForVerify_(a, b){
+  // เทียบเฉพาะค่าที่เรากำหนดเองตอนสร้างแถว (รหัส/งวด/จำนวนเงิน/วันที่) ไม่เทียบคอลัมน์คำนวณ
+  // (D/E/F/G/K) เพราะอาจถูกคำนวณซ้ำ/เปลี่ยนได้ภายหลังโดยไม่ได้แปลว่าแถวนี้ไม่ใช่แถวเดียวกัน
+  return String(a[0])===String(b[0]) && String(a[1])===String(b[1]) && a[2]===b[2] &&
+         a[7]===b[7] && String(a[8])===String(b[8]) && a[9]===b[9];
+}
+async function commitToWRVerified_(rows, maxAttempts){
+  maxAttempts = maxAttempts || 3;
+  if(!rows.length) return WR_DATA;
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    await apiPost('commitToWR', {rows});
+    await sleep_(1200); // เผื่อเวลาให้ Google Sheet เขียนเสร็จจริงก่อนไปอ่านกลับมาเช็ค
+    let freshWR;
+    try{
+      freshWR = normalizeRefRows_(await apiGet('getWR'));
+    }catch(readErr){
+      // "ตรวจสอบไม่ได้" ไม่เท่ากับ "รู้ว่าพัง" ห้ามเดาแล้วส่งซ้ำ เดี๋ยวกลายเป็นบันทึกซ้ำสอง
+      throw new Error(`บันทึกไปแล้ว แต่ตรวจสอบผลไม่ได้ (${readErr.message}) — ห้ามกดบันทึกซ้ำ กรุณาเปิดแท็บ Working Reference เช็คด้วยตาก่อนว่าเข้าไปจริงหรือยัง`);
+    }
+    const allFound = rows.every(row => freshWR.some(r => rowMatchesForVerify_(r, row)));
+    if(allFound) return freshWR;
+    console.warn(`commitToWR ครั้งที่ ${attempt}: เช็คแล้วไม่พบแถวที่บันทึกไปจริงในชีท — ลองส่งใหม่ (ปลอดภัย เพราะยืนยันแล้วว่ายังไม่เคยเข้าชีทจริง)`);
+    if(attempt<maxAttempts) await sleep_(1500*attempt);
+  }
+  throw new Error(`บันทึกลง Working Reference ไม่สำเร็จ แม้ลองซ้ำแล้ว ${maxAttempts} ครั้ง — ยังไม่มีข้อมูลใดถูกบันทึก กรุณาลองใหม่อีกครั้ง`);
+}
+
+// replaceCheckToday_ ฝั่ง backend เป็นการ "แทนที่ทั้งหมด" (ไม่ใช่ต่อท้าย) การส่งซ้ำจึงปลอดภัยเสมอ
+// ไม่ว่ารอบก่อนจะสำเร็จหรือไม่ก็ตาม (ผลลัพธ์สุดท้ายเหมือนเดิม ไม่มีความเสี่ยงข้อมูลซ้ำ)
+async function replaceCheckTodayVerified_(rows, maxAttempts){
+  maxAttempts = maxAttempts || 3;
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    await apiPost('replaceCheckToday', {rows});
+    await sleep_(1000);
+    try{
+      const fresh = await apiGet('getCheckToday');
+      if(fresh.length === rows.length) return fresh;
+      console.warn(`replaceCheckToday ครั้งที่ ${attempt}: จำนวนแถวไม่ตรง (ได้ ${fresh.length} ต้องการ ${rows.length}) ลองใหม่...`);
+    }catch(readErr){
+      console.warn(`replaceCheckToday ครั้งที่ ${attempt}: ตรวจสอบผลไม่ได้ (${readErr.message}) ลองใหม่...`);
+    }
+    if(attempt<maxAttempts) await sleep_(1500*attempt);
+  }
+  throw new Error(`บันทึกรายการวันนี้ไม่สำเร็จ แม้ลองซ้ำแล้ว ${maxAttempts} ครั้ง — ข้อมูลในหน้าเว็บอาจไม่ตรงกับที่บันทึกจริงในชีท กรุณารีเฟรชหน้าเว็บแล้วตรวจสอบอีกครั้ง`);
+}
+
+// commitContracts_ ฝั่ง backend เป็น upsert ตามรหัสลูกค้า (มีอยู่แล้ว=แก้ทับ, ยังไม่มี=เพิ่มใหม่)
+// การส่งซ้ำจึงปลอดภัยเสมอเหมือนกัน ไม่มีความเสี่ยงข้อมูลซ้ำ
+async function commitContractsVerified_(payload, maxAttempts){
+  maxAttempts = maxAttempts || 3;
+  for(let attempt=1; attempt<=maxAttempts; attempt++){
+    await apiPost('commitContracts', {rows: payload});
+    await sleep_(1000);
+    try{
+      const fresh = await apiGet('getContracts');
+      const allFound = payload.every(p => fresh.some(c =>
+        String(c.code)===String(p.code) && Number(c.months)===Number(p.months) && Number(c.monthlyAmount)===Number(p.monthlyAmount)
+      ));
+      if(allFound) return fresh;
+      console.warn(`commitContracts ครั้งที่ ${attempt}: เช็คแล้วข้อมูลยังไม่ตรงกับที่บันทึกไป ลองใหม่...`);
+    }catch(readErr){
+      console.warn(`commitContracts ครั้งที่ ${attempt}: ตรวจสอบผลไม่ได้ (${readErr.message}) ลองใหม่...`);
+    }
+    if(attempt<maxAttempts) await sleep_(1500*attempt);
+  }
+  throw new Error(`บันทึกข้อมูลสัญญาไม่สำเร็จ แม้ลองซ้ำแล้ว ${maxAttempts} ครั้ง กรุณาลองใหม่อีกครั้ง`);
 }
 
 const COLS = ['รหัสลูกค้า','งวดที่','จำนวนเงิน','งวด(ตัวเลข)','ยอดงวดปกติ','จำนวนซ้ำของยอด','งวดที่ผ่านแล้ว','วันที่','เดือน','พ.ศ.','เลขงวด'];
@@ -1088,8 +1173,7 @@ async function importWRPaste(){
     const btn = document.getElementById('btn-import-wr');
     btn.disabled = true;
     try{
-      await apiPost('commitToWR', {rows: committingBatch});
-      committingBatch.forEach(r=>WR_DATA.push(r));
+      WR_DATA = await commitToWRVerified_(committingBatch);
       recomputeF();
     }catch(e){
       resultEl.innerHTML = `<span class="result-err">บันทึกไม่สำเร็จ: ${e.message}</span>`;
@@ -1584,12 +1668,7 @@ function renderRefTable(data, tableId, hintId, filter){
 /* ===================== persistence ===================== */
 async function saveRows(){
   try{
-    await apiPost('replaceCheckToday', {rows: checkRows});
-    // apiPost เป็น no-cors อ่านผลจริงจาก server ไม่ได้ เลยยืนยันด้วยการอ่านกลับมาเช็คจำนวนแถวอีกที
-    const check = await apiGet('getCheckToday');
-    if(check.length !== checkRows.length){
-      console.warn(`saveRows: จำนวนแถวใน Sheet (${check.length}) ไม่ตรงกับที่ส่งไป (${checkRows.length}) — ลองบันทึกใหม่อีกครั้ง`);
-    }
+    await replaceCheckTodayVerified_(checkRows);
     setConnStatus('connected', `เชื่อมต่อแล้ว — WR ${WR_DATA.length.toLocaleString()} / Archive ${AR_DATA.length.toLocaleString()} แถว`);
   }catch(e){
     console.error('saveRows failed:', e);
@@ -1885,8 +1964,7 @@ async function commitBackfillToWR(){
     committingBatch.push(newRow);
   });
   try{
-    await apiPost('commitToWR', {rows: committingBatch});
-    committingBatch.forEach(r=>WR_DATA.push(r));
+    WR_DATA = await commitToWRVerified_(committingBatch);
     recomputeF();
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     renderDashboard(); // รีเฟรชหน้าจอให้ตรงกับสถานะล่าสุด (ตอนนี้แถวพวกนี้จะกลายเป็น "ซ้ำ" ถูกต้อง
@@ -2089,8 +2167,7 @@ async function commitContracts(){
   btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
   const payload = rows.map(r=>({ code: r.code, months: r.months, monthlyAmount: contractRowFinalAmount(r) }));
   try{
-    await apiPost('commitContracts', {rows: payload});
-    CONTRACTS_DATA = await apiGet('getContracts');
+    CONTRACTS_DATA = await commitContractsVerified_(payload);
     document.getElementById('contract-paste').value = '';
     window._contractCompareRows = [];
     document.getElementById('contract-compare-result').innerHTML = `<div class="banner ok"><div class="icon">✓</div><div><div class="title">บันทึกข้อมูลสัญญา ${payload.length} คน เรียบร้อย</div></div></div>`;
