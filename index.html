@@ -592,6 +592,51 @@ function normalizeRefRows_(rows){
   return rows;
 }
 
+/* ---------------------------------------------------------------------------
+ * ดัชนีแยกตามรหัสลูกค้า (index) — ตัวช่วยเรื่องความเร็วล้วนๆ ไม่เปลี่ยนผลลัพธ์การตรวจสอบ
+ *
+ * เดิมการตรวจสอบ 1 แถว ต้องไล่อ่าน WR ทั้งชีท (~8,471 แถว) ซ้ำถึง 8-9 รอบ (เช็คซ้ำ, หาว่าเคยมี
+ * ประวัติไหม, หายอดงวดปกติ, หางวดล่าสุดที่จ่ายครบ, รวมยอดจ่ายบางส่วน ฯลฯ) แถมยังก๊อป array
+ * ทั้งชุดใหม่อีก 1 รอบต่อแถว — ถ้าตรวจ 100 รายการก็คือไล่อ่านเกือบ 8 ล้านครั้งต่อการ render 1 ครั้ง
+ * และหน้าเว็บ render ใหม่แทบทุกครั้งที่พิมพ์/แก้ข้อมูล ทำให้ยิ่งข้อมูลเยอะยิ่งหน่วงสะสม
+ *
+ * แก้โดยจัดกลุ่มแถวตามรหัสลูกค้าไว้ล่วงหน้าครั้งเดียว แล้วดึงเฉพาะแถวของลูกค้ารายนั้นมาใช้
+ * (ปกติแค่ไม่กี่แถว) — ฟังก์ชันคำนวณทุกตัวกรอง r[0]==A ทิ้งอยู่แล้ว ผลลัพธ์จึงเหมือนเดิมเป๊ะ
+ *
+ * ดัชนีเก็บ "ตัวอ้างอิงถึงแถวเดิม" ไม่ได้ก๊อปข้อมูล ดังนั้นโค้ดที่แก้ค่าในแถวโดยตรง (เช่น recomputeF()
+ * ที่เขียนคอลัมน์ F ทับ) จึงเห็นผลผ่านดัชนีทันทีอยู่แล้ว ไม่ต้องสั่งอะไรเพิ่ม
+ *
+ * การตรวจว่าดัชนีเก่าไปหรือยัง ดูจาก "ตัวอ้างอิง array + จำนวนแถว" ครอบคลุมทั้งกรณีโหลดข้อมูลใหม่
+ * ทั้งชุด (array คนละตัว) และกรณี push แถวที่เพิ่งบันทึกเข้าไป (จำนวนแถวเปลี่ยน) โดยไม่ต้องไปไล่
+ * แก้ทุกจุดที่แตะ WR_DATA — กันลืมถ้ามีการเพิ่มจุดใหม่ในอนาคต
+ * ------------------------------------------------------------------------- */
+let _wrIdx = null, _wrIdxSrc = null, _wrIdxLen = -1;
+let _arIdx = null, _arIdxSrc = null, _arIdxLen = -1;
+function buildCodeIndex_(rows){
+  const idx = new Map();
+  for(const r of rows){
+    // ใช้ String(r[0]) ไม่ trim — ให้ผลการจับคู่เหมือนกับ r[0]==A / String(r[0])===A ที่โค้ดเดิม
+    // ใช้อยู่ทุกประการ (รหัสที่อ่านมาเป็นตัวเลขจากชีทจะถูกแปลงเป็นสตริงเหมือนกันทั้งสองแบบ)
+    const k = String(r[0]);
+    let arr = idx.get(k);
+    if(!arr){ arr = []; idx.set(k, arr); }
+    arr.push(r);
+  }
+  return idx;
+}
+function wrRowsFor_(code){
+  if(_wrIdxSrc !== WR_DATA || _wrIdxLen !== WR_DATA.length){
+    _wrIdx = buildCodeIndex_(WR_DATA); _wrIdxSrc = WR_DATA; _wrIdxLen = WR_DATA.length;
+  }
+  return _wrIdx.get(String(code)) || [];
+}
+function arRowsFor_(code){
+  if(_arIdxSrc !== AR_DATA || _arIdxLen !== AR_DATA.length){
+    _arIdx = buildCodeIndex_(AR_DATA); _arIdxSrc = AR_DATA; _arIdxLen = AR_DATA.length;
+  }
+  return _arIdx.get(String(code)) || [];
+}
+
 // Apps Script Web App ไม่ส่ง CORS header กลับมาให้ fetch() อ่าน response ได้โดยตรง
 // (แม้ตั้ง "Anyone" access แล้วก็ตาม) จึงต้องใช้ JSONP สำหรับการอ่านข้อมูล (แทรก <script> แทน fetch)
 // และใช้ fetch แบบ no-cors (fire-and-forget อ่านผลลัพธ์ไม่ได้) สำหรับการเขียนข้อมูล
@@ -884,8 +929,13 @@ function computeStatus(row, index, allRows, dateOverride){
     return {status:'ซ้ำในรายการตรวจ', note:''};
   }
 
-  const dupWR = WR_DATA.some(r=>String(r[0])===A && String(r[1])===B && r[2]===C && sameDate(r));
-  const dupAR = AR_DATA.some(r=>String(r[0])===A && String(r[1])===B && r[2]===C && sameDate(r));
+  // ดึงเฉพาะแถวของลูกค้ารายนี้จากดัชนี แทนการไล่อ่าน WR/Archive ทั้งชีทซ้ำหลายรอบต่อ 1 แถวที่ตรวจ
+  // (ทุกการเช็คด้านล่างกรองด้วยรหัสลูกค้าอยู่แล้ว ผลลัพธ์จึงเหมือนเดิมทุกกรณี)
+  const wrRows = wrRowsFor_(A);
+  const arRows = arRowsFor_(A);
+
+  const dupWR = wrRows.some(r=>String(r[1])===B && r[2]===C && sameDate(r));
+  const dupAR = arRows.some(r=>String(r[1])===B && r[2]===C && sameDate(r));
   if(dupWR||dupAR){
     if(row.confirmDup) return {status:'ซ้ำ (ยืนยันแล้ว)', note:'พนักงานยืนยันแล้วว่าลูกค้าจ่ายจริงมากกว่า 1 ครั้งในวันเดียวกัน'};
     return {status:'ซ้ำ', note:''};
@@ -894,8 +944,8 @@ function computeStatus(row, index, allRows, dateOverride){
   const p = parsePeriod(B);
   if(!p || !p.fmtOK) return {status:'รูปแบบงวดไม่ถูกต้อง', note:''};
 
-  const inWR = WR_DATA.some(r=>String(r[0])===A);
-  const inAR = AR_DATA.some(r=>String(r[0])===A);
+  const inWR = wrRows.length > 0;
+  const inAR = arRows.length > 0;
 
   if(!inWR){
     if(inAR) return {status:'ลูกค้าปิดสัญญาแล้ว', note:'ลูกค้ารายนี้เคยผ่อนจบไปแล้ว ตรวจสอบว่าเป็นสัญญาใหม่หรือรายการผิดพลาด'};
@@ -915,11 +965,18 @@ function computeStatus(row, index, allRows, dateOverride){
     }
   }
 
-  const effectiveWR = WR_DATA.concat(priorRows.map(r=>{
-    const pp = parsePeriod(r.period);
-    const amt = parseFloat(r.amount);
-    return [ (r.code||'').trim(), (r.period||'').trim(), isNaN(amt)?0:amt, null, null, null, pp?periodsCompleted(pp):null, null,null,null,null ];
-  }));
+  // เดิมก๊อป WR ทั้งชีท (~8,471 แถว) ต่อท้ายด้วย priorRows ทุกแถวที่ตรวจ — ตอนนี้ใช้เฉพาะแถวของ
+  // ลูกค้ารายนี้ และกรอง priorRows ให้เหลือเฉพาะรหัสเดียวกันตั้งแต่แรก (ฟังก์ชันปลายทางกรองทิ้งอยู่แล้ว
+  // ผลลัพธ์เท่าเดิม) ลดทั้งเวลาไล่อ่านและการจองหน่วยความจำลงมหาศาลเมื่อข้อมูลสะสมเยอะขึ้น
+  const effectiveWR = wrRows.concat(
+    priorRows
+      .filter(r=>(r.code||'').trim()===A)
+      .map(r=>{
+        const pp = parsePeriod(r.period);
+        const amt = parseFloat(r.amount);
+        return [ (r.code||'').trim(), (r.period||'').trim(), isNaN(amt)?0:amt, null, null, null, pp?periodsCompleted(pp):null, null,null,null,null ];
+      })
+  );
 
   return nestedStatus(A, p, C, effectiveWR);
 }
@@ -1897,12 +1954,13 @@ function parseContractLine(line){
 function compareContractRow(row){
   const A = row.code;
   const existingContract = CONTRACTS_DATA.find(c=>String(c.code)===A) || null;
-  const hasHistory = WR_DATA.some(r=>String(r[0])===A);
+  const wrRows = wrRowsFor_(A); // เฉพาะแถวของลูกค้ารายนี้ แทนการไล่อ่าน WR ทั้งชีท 3 รอบต่อ 1 บรรทัดที่วาง
+  const hasHistory = wrRows.length > 0;
   if(!hasHistory){
     return { ...row, hasHistory:false, amountStatus:'no-history', monthsStatus:'no-history', stdAmt:null, maxCompleted:null, existingContract };
   }
-  const stdAmt = computeStdAmt(A, WR_DATA); // 0 ถ้าไม่เจอยอดงวดปกติที่ชัดเจน
-  const maxCompleted = maxCompletedAll(A, WR_DATA);
+  const stdAmt = computeStdAmt(A, wrRows); // 0 ถ้าไม่เจอยอดงวดปกติที่ชัดเจน
+  const maxCompleted = maxCompletedAll(A, wrRows);
   const amountStatus = stdAmt===0 ? 'no-baseline'
     : (Math.abs(stdAmt - row.monthlyAmount) < 0.005 ? 'match' : 'mismatch');
   const monthsStatus = maxCompleted > row.months ? 'completed' : 'normal';
