@@ -123,17 +123,116 @@ const NAV = [
   { key: "admin", label: "Admin", icon: ShieldCheck },
 ];
 
+/* ============================================================================
+ * ตรรกะตรวจสอบ — ย้ายมาจากระบบเดิม (parsePeriod / computePeriodResult_ / nestedStatus)
+ * เกือบทั้งหมดคัดลอกตรงๆ ไม่ได้แก้ตรรกะเลย ต่างแค่แหล่งข้อมูล: เดิมอ่านจากแถว Working
+ * Reference สะสมทั้งชีท ตอนนี้ดึง "ประวัติการจ่ายของสัญญานั้น" จากตาราง payments จริงแทน
+ * ==========================================================================*/
 function parsePeriod(raw) {
-  const clean = String(raw ?? "").trim();
-  if (!clean) return null;
-  const m = clean.match(/^(\d+)\s*(?:-\s*(\d+))?\s*(?:\(\s*(.+?)\s*\))?$/);
-  if (!m) return null;
-  const start = parseInt(m[1], 10);
-  const end = m[2] ? parseInt(m[2], 10) : start;
-  const status = m[3] || null;
-  if (isNaN(start) || isNaN(end) || start < 1 || end < start) return null;
-  return { start, end, status, raw: clean };
+  if (raw === null || raw === undefined || raw === "") return null;
+  const clean = String(raw).trim().replace(/\s+/g, "");
+  const hasParen = clean.includes("(");
+  const base = hasParen ? clean.substring(0, clean.indexOf("(")) : clean;
+  const status = hasParen ? clean.substring(clean.indexOf("(") + 1, clean.length - 1) : "";
+  const hasDash = base.includes("-");
+  let start, end;
+  if (hasDash) {
+    const parts = base.split("-");
+    start = parseFloat(parts[0]); end = parseFloat(parts[1]);
+  } else {
+    start = parseFloat(base); end = start;
+  }
+  const numOK = !isNaN(start) && !isNaN(end);
+  const fmtOK = numOK &&
+    (status === "" || status === "สะสม" || status === "บางส่วน" || status === "ครบ" || status === "จบ") &&
+    start >= 1 && end >= start &&
+    (hasDash ? end > start : true) &&
+    !(hasDash && status === "ครบ") &&
+    start > 0 && end > 0;
+  return { clean, hasParen, base, status, hasDash, start, end, fmtOK };
 }
+
+// เทียบเท่า periodsCompleted(p) ของเดิม แต่อ่านจากแถว payments จริง (installment_number/
+// payment_type แยกฟิลด์ชัดเจนอยู่แล้ว) แทนการแกะจากข้อความ label รวมแบบเดิม ผลลัพธ์เหมือนกันทุกกรณี
+function periodsCompletedFromPayment(h) {
+  if (!h.payment_type) return h.installment_number; // งวดปกติไม่มีสถานะพิเศษ = ครบเต็มงวด
+  if (h.payment_type.includes("ครบ") || h.payment_type.includes("จบ")) return h.installment_number;
+  return null; // บางส่วน/สะสม ยังไม่นับว่าครบ
+}
+function fmt(n) { return Math.round(n).toLocaleString("th-TH"); }
+function maxCompletedAll(history) {
+  let m = 0;
+  for (const h of history) { const c = periodsCompletedFromPayment(h); if (c !== null && c > m) m = c; }
+  return m;
+}
+function lastOKBefore(history, start) {
+  let m = 0;
+  for (const h of history) { const c = periodsCompletedFromPayment(h); if (c !== null && c < start && c > m) m = c; }
+  return m;
+}
+function partSum(history, start) {
+  let s = 0;
+  for (const h of history) {
+    if (h.installment_number === start && (h.payment_type === "สะสม" || h.payment_type === "บางส่วน")) s += Number(h.amount) || 0;
+  }
+  return s;
+}
+function skipNote(start, J) {
+  const diff = start - J - 1;
+  if (diff === 1) return `ขาดงวด ${J + 1}`;
+  if (diff > 1) return `ขาดงวด ${J + 1}-${start - 1}`;
+  return "";
+}
+
+// ตรรกะเทียบยอด/งวดหลัก — คัดลอกมาจากระบบเดิมทั้งหมด ไม่ได้แก้แม้แต่บรรทัดเดียว
+function computePeriodResult_(p, C, I, K, J) {
+  if (!p.hasDash && p.status === "") {
+    if (p.start !== J + 1) return { status: "ข้ามงวด", note: skipNote(p.start, J) };
+    if (K + C === I) return { status: "ถูก", note: "" };
+    if (K + C > I) return { status: "ยอดเกิน", note: "" };
+    return { status: "จำนวนเงินไม่ตรง", note: `ควรเป็น ${fmt(I - K)}` };
+  }
+  if (p.status === "สะสม" || p.status === "บางส่วน") {
+    if (p.start !== J + 1) return { status: "ข้ามงวด", note: skipNote(p.start, J) };
+    if (I === 0) return { status: "รอครบงวด", note: "" };
+    if (K + C > I) return { status: "ยอดเกิน", note: "" };
+    if (K + C === I) return { status: "ถูก", note: "" };
+    return { status: "รอครบงวด", note: "" };
+  }
+  if (p.status === "ครบ") {
+    if (p.start !== J + 1) return { status: "ข้ามงวด", note: skipNote(p.start, J) };
+    if (K === 0) return { status: "รูปแบบงวดไม่ถูกต้อง", note: "ใช้ (ครบ) แต่ไม่มียอดสะสม/บางส่วนของงวดนี้มาก่อน ตรวจสอบว่ากรอกถูกงวดหรือควรใช้ (บางส่วน)/(สะสม) แทน" };
+    if (K + C === I) return { status: "ถูก", note: "" };
+    if (K + C > I) return { status: "ยอดเกิน", note: "" };
+    return { status: "จำนวนเงินไม่ตรง", note: `ควรเป็น ${fmt(I - K)}` };
+  }
+  if ((p.hasDash && p.status === "") || (p.hasDash && p.status === "จบ") || (!p.hasDash && p.status === "จบ")) {
+    if (p.start !== J + 1) return { status: "ข้ามงวด", note: skipNote(p.start, J) };
+    const G = p.hasDash ? p.end : p.start;
+    const eligibleForDiscount = p.status === "จบ" && J <= 5;
+    const periodCount = G - p.start + 1;
+    const fullExpected = periodCount * I - K;
+    const discountedExpected = periodCount * I * 0.9 - K;
+    const matchesFull = Math.abs(C - fullExpected) < 0.005;
+    const matchesDiscount = eligibleForDiscount && Math.abs(C - discountedExpected) < 0.005;
+    if (matchesFull || matchesDiscount) {
+      let note = (p.hasDash && p.status === "จบ") ? "ชำระหลายงวดพร้อมจบสัญญา" : "";
+      if (matchesDiscount) note += (note ? " — " : "") + "ใช้ส่วนลด 10%";
+      return { status: "ถูก", note };
+    }
+    const expectedNote = eligibleForDiscount
+      ? `ควรเป็น ${fmt(fullExpected)} (เต็มราคา) หรือ ${fmt(discountedExpected)} (ลด 10%)`
+      : `ควรเป็น ${fmt(fullExpected)}`;
+    return { status: "จำนวนเงินไม่ตรง", note: expectedNote };
+  }
+  return { status: "รูปแบบงวดไม่ถูกต้อง", note: "" };
+}
+
+const STATUS_TONE = {
+  "ถูก": "ok", "จำนวนเงินไม่ตรง": "bad", "ยอดเกิน": "bad", "ข้ามงวด": "warn",
+  "รอครบงวด": "info", "รูปแบบงวดไม่ถูกต้อง": "bad", "งวดนี้จ่ายครบไปแล้ว": "warn",
+  "เกินจำนวนงวดสัญญา": "bad",
+};
 
 // ค้นหาสัญญาของรหัสนี้จากฐานข้อมูลจริง — ถ้ามีหลายสัญญา (รหัสถูกใช้ซ้ำ) เลือกตัวที่ status=active
 // ก่อนเสมอ เหมือน logic เดิมตอนย้ายข้อมูล ไม่งั้นค่อยใช้ตัวล่าสุดตามวันที่เริ่ม
@@ -146,15 +245,38 @@ async function fetchContractForCode(token, branchId, deviceCode) {
   return rows.find((c) => c.status === "active") || rows[0];
 }
 
-async function fetchAlreadyPaid(token, contractId, installmentNumber) {
-  const rows = await supabaseRest(
-    `payments?contract_id=eq.${contractId}&installment_number=eq.${installmentNumber}&select=payment_id&limit=1`,
+// ดึงประวัติการจ่ายทั้งหมดของสัญญานี้ (แทนการไล่อ่านแถว Working Reference ของรหัสนี้ทั้งชีทแบบเดิม)
+async function fetchPaymentHistory(token, contractId) {
+  return await supabaseRest(
+    `payments?contract_id=eq.${contractId}&select=installment_number,payment_type,amount,payment_date&order=installment_number.asc`,
     { token }
   );
-  return rows.length > 0;
 }
 
-async function checkRowLive(row, priorRowsInBatch, token, branchId, contractCache) {
+// เช็คจ่ายซ้ำ (งวด+ประเภท+ยอด+วันที่ตรงกันเป๊ะ) — รวม Working Reference/Archive เดิมเป็นแหล่งเดียว
+// เพราะระบบใหม่ไม่แยกสองที่เก็บแล้ว (status ของสัญญาบอกอยู่แล้วว่าปิด/เปิดอยู่)
+function findDuplicateInHistory(history, p, C, dateStr) {
+  return history.some((h) => (h.payment_type || null) === (p.status || null) &&
+    h.installment_number === p.start && Number(h.amount) === C && h.payment_date === dateStr);
+}
+
+async function nestedStatus(contract, p, C, history) {
+  const L = maxCompletedAll(history);
+  if (L >= p.start) return { status: "งวดนี้จ่ายครบไปแล้ว", note: `ลูกค้าชำระถึงงวด ${L} แล้ว ตรวจสอบว่าใส่งวด/รหัสลูกค้าผิดหรือไม่` };
+
+  if (contract.total_installments > 0) {
+    const reachedPeriod = p.hasDash ? p.end : p.start;
+    if (reachedPeriod > contract.total_installments) {
+      return { status: "เกินจำนวนงวดสัญญา", note: `สัญญาของลูกค้ารายนี้กำหนดไว้ ${contract.total_installments} งวด แต่รายการนี้เป็นงวดที่ ${reachedPeriod} — ตรวจสอบว่าใส่งวด/รหัสลูกค้าผิด หรือมีการต่อ/แก้ไขสัญญาโดยไม่ได้อัปเดตข้อมูลสัญญา` };
+    }
+  }
+  const J = lastOKBefore(history, p.start);
+  const I = Number(contract.amount_per_installment);
+  const K = partSum(history, p.start);
+  return computePeriodResult_(p, C, I, K, J);
+}
+
+async function checkRowLive(row, priorRowsInBatch, token, branchId, contractCache, checkDate) {
   const code = row.code.trim();
   const amount = parseFloat(row.amount);
   if (!code || !row.period || !row.amount) return { status: "", tone: "neutral" };
@@ -162,47 +284,33 @@ async function checkRowLive(row, priorRowsInBatch, token, branchId, contractCach
   const dupInBatch = priorRowsInBatch.some(
     (r) => r.code.trim() === code && r.period.trim() === row.period.trim() && parseFloat(r.amount) === amount
   );
-  if (dupInBatch) return { status: "ซ้ำในรายการที่เพิ่งพิมพ์", tone: "warn" };
+  if (dupInBatch) return { status: "ซ้ำในรายการตรวจ", tone: "warn" };
 
   const p = parsePeriod(row.period);
-  if (!p) return { status: "รูปแบบงวดไม่ถูกต้อง", tone: "bad" };
+  if (!p || !p.fmtOK) return { status: "รูปแบบงวดไม่ถูกต้อง", tone: "bad" };
 
-  let contract = contractCache.current.get(code);
-  if (contract === undefined) {
+  let entry = contractCache.current.get(code);
+  if (entry === undefined) {
     try {
-      contract = await fetchContractForCode(token, branchId, code);
+      const contract = await fetchContractForCode(token, branchId, code);
+      const history = contract ? await fetchPaymentHistory(token, contract.contract_id) : [];
+      entry = { contract, history };
     } catch (e) {
       return { status: `เชื่อมต่อไม่สำเร็จ: ${e.message}`, tone: "bad" };
     }
-    contractCache.current.set(code, contract);
+    contractCache.current.set(code, entry);
   }
+  const { contract, history } = entry;
 
-  if (!contract) {
-    return p.start === 1
-      ? { status: "ลูกค้าใหม่ (ยังไม่มีสัญญาอ้างอิง)", tone: "info" }
-      : { status: "ไม่พบข้อมูลลูกค้า", tone: "bad" };
-  }
+  if (!contract) return { status: "ไม่พบข้อมูลลูกค้า", tone: "bad" };
   if (contract.status !== "active") {
-    return { status: `สัญญานี้ปิดแล้ว (${contract.status === "closed" ? "ผ่อนจบ" : "คืนเครื่อง"})`, tone: "warn" };
+    return { status: `สัญญานี้ปิดแล้ว (${contract.status === "closed" ? "ผ่อนจบ" : "คืนเครื่อง"})`, tone: "warn", note: "ลูกค้ารายนี้เคยผ่อนจบ/คืนเครื่องไปแล้ว ตรวจสอบว่าเป็นสัญญาใหม่หรือรายการผิดพลาด" };
   }
   if (isNaN(amount) || amount <= 0) return { status: "จำนวนเงินไม่ถูกต้อง", tone: "bad" };
+  if (findDuplicateInHistory(history, p, amount, checkDate)) return { status: "ซ้ำ", tone: "warn" };
 
-  if (!p.status) {
-    let alreadyPaid;
-    try {
-      alreadyPaid = await fetchAlreadyPaid(token, contract.contract_id, p.start);
-    } catch (e) {
-      return { status: `เชื่อมต่อไม่สำเร็จ: ${e.message}`, tone: "bad" };
-    }
-    if (alreadyPaid) return { status: "งวดนี้จ่ายครบไปแล้ว", tone: "warn" };
-    if (amount === Number(contract.amount_per_installment)) return { status: "ถูก", tone: "ok", contractId: contract.contract_id, installmentNumber: p.start };
-    return { status: `จำนวนเงินไม่ตรง (ควรเป็น ${Number(contract.amount_per_installment).toLocaleString()})`, tone: "bad" };
-  }
-  if (p.status.includes("บางส่วน") || p.status.includes("สะสม"))
-    return { status: `รับไว้ (${p.status})`, tone: "info", contractId: contract.contract_id, installmentNumber: p.start, paymentType: p.status };
-  if (p.status.includes("ครบ") || p.status.includes("จบ"))
-    return { status: "ถูก (ครบงวด)", tone: "ok", contractId: contract.contract_id, installmentNumber: p.start, paymentType: p.status };
-  return { status: `สถานะ "${p.status}" ไม่รู้จัก`, tone: "bad" };
+  const result = await nestedStatus(contract, p, amount, history);
+  return { status: result.status, note: result.note, tone: STATUS_TONE[result.status] || "bad", contractId: contract.contract_id, installmentNumber: p.start, paymentType: p.status || null };
 }
 const TONE_DOT = { ok: "●", warn: "●", bad: "●", info: "●", neutral: "●", loading: "○" };
 
@@ -210,9 +318,9 @@ const TONE_DOT = { ok: "●", warn: "●", bad: "●", info: "●", neutral: "�
 // สาขาอื่นยังไม่ได้ทำ ใส่ไว้ในตัวเลือกเผื่ออนาคตแต่ตอนนี้จะไม่พบข้อมูลใดๆ
 const BRANCH_ID_MAP = { "สุราษฎร์ธานี": "surat", "สมุย": "samui", "หลังสวน": "langsuan" };
 
-// ตรวจทีละแถวตามลำดับ (ไม่ขนาน) เพราะการเช็ค "ซ้ำในรายการที่เพิ่งพิมพ์" ต้องรู้ผลของแถวก่อนหน้า
-// ก่อนเสมอ — cache ผลค้นหาสัญญาต่อรหัสไว้ใน session เดียวกัน ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว
-function useComputedRows(rows, token, branchId) {
+// ตรวจทีละแถวตามลำดับ (ไม่ขนาน) เพราะการเช็ค "ซ้ำในรายการตรวจ" ต้องรู้ผลของแถวก่อนหน้า
+// ก่อนเสมอ — cache ผลค้นหาสัญญา+ประวัติต่อรหัสไว้ใน session เดียวกัน ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว
+function useComputedRows(rows, token, branchId, checkDate) {
   const [results, setResults] = useState({});
   const contractCache = useRef(new Map());
 
@@ -227,13 +335,14 @@ function useComputedRows(rows, token, branchId) {
       }
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
-        const res = await checkRowLive(r, rows.slice(0, i), token, branchId, contractCache);
+        const res = await checkRowLive(r, rows.slice(0, i), token, branchId, contractCache, checkDate);
         if (cancelled) return;
         setResults((prev) => ({ ...prev, [r.id]: res }));
       }
     })();
     return () => { cancelled = true; };
-  }, [rows, token, branchId]);
+
+  }, [rows, token, branchId, checkDate]);
 
   return rows.map((r) => ({ ...r, result: results[r.id] || { status: "", tone: "neutral" } }));
 }
@@ -416,16 +525,30 @@ function CheckPage() {
     setProfile(null);
   }
 
-  const [rows, setRows] = useState([]);
+  const LOCAL_KEY = "checkpage_rows_v1";
+  const [rows, setRows] = useState(() => {
+    // เก็บรายการที่ตรวจไว้ในเครื่อง (localStorage) ให้ยังอยู่ต่อแม้รีเฟรชหน้า/ปิดแท็บ จนกว่าจะ
+    // กด "ล้างรายการทั้งหมด" เอง — ใช้ localStorage ได้ปกติเพราะไฟล์นี้เป็นเว็บเพจจริงที่โฮสต์เอง
+    // (ไม่ใช่อาร์ติแฟกต์ในแชทที่ห้ามใช้ browser storage)
+    try {
+      const saved = localStorage.getItem(LOCAL_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [form, setForm] = useState({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
   const [showExtra, setShowExtra] = useState(false);
   const [search, setSearch] = useState("");
   const [branch, setBranch] = useState("สุราษฎร์ธานี");
-  const nextId = useRef(1);
+  const [checkDate, setCheckDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const nextId = useRef(rows.reduce((m, r) => Math.max(m, r.id || 0), 0) + 1);
   const periodRef = useRef(null);
   const amountRef = useRef(null);
 
-  const computed = useComputedRows(rows, session?.access_token, BRANCH_ID_MAP[branch]);
+  useEffect(() => {
+    try { localStorage.setItem(LOCAL_KEY, JSON.stringify(rows)); } catch {}
+  }, [rows]);
+
+  const computed = useComputedRows(rows, session?.access_token, BRANCH_ID_MAP[branch], checkDate);
   const filtered = computed.filter((r) => {
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
@@ -440,7 +563,10 @@ function CheckPage() {
     document.getElementById("code-input")?.focus();
   }
   function removeRow(id) { setRows((prev) => prev.filter((r) => r.id !== id)); }
-  function clearAll() { setRows([]); }
+  function clearAll() {
+    setRows([]);
+    try { localStorage.removeItem(LOCAL_KEY); } catch {}
+  }
   function handlePasteCode(e) {
     const text = e.clipboardData.getData("text");
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -578,6 +704,10 @@ function CheckPage() {
             <span style={{ fontWeight: 600, fontSize: 14.5 }}>เพิ่มรายการรับชำระเงิน</span>
             <span style={{ marginLeft: "auto", fontSize: 11.5, color: t.ink3 }}>วาง 3 บรรทัด (รหัส/งวด/ยอด) ลงช่องรหัส ระบบกระจายให้เอง</span>
           </div>
+          <div style={{ marginBottom: 12, maxWidth: 200 }}>
+            <label style={label}>วันที่ทำรายการ</label>
+            <input type="date" style={input} value={checkDate} onChange={(e) => setCheckDate(e.target.value)} />
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <div>
               <label style={label}>รหัสลูกค้า</label>
@@ -647,9 +777,12 @@ function CheckPage() {
                     <td style={{ padding: "10px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.amount ? Number(r.amount).toLocaleString() : "—"}</td>
                     <td style={{ padding: "10px 14px" }}>
                       {r.result.status ? (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: t[r.result.tone + "Soft"], color: t[r.result.tone], borderRadius: 99, padding: "3px 10px", fontSize: 12, fontWeight: 600 }}>
-                          <span style={{ fontSize: 8 }}>{TONE_DOT[r.result.tone]}</span>{r.result.status}
-                        </span>
+                        <div>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: t[r.result.tone + "Soft"], color: t[r.result.tone], borderRadius: 99, padding: "3px 10px", fontSize: 12, fontWeight: 600 }}>
+                            <span style={{ fontSize: 8 }}>{TONE_DOT[r.result.tone]}</span>{r.result.status}
+                          </span>
+                          {r.result.note && <div style={{ fontSize: 11.5, color: t.ink3, marginTop: 4 }}>{r.result.note}</div>}
+                        </div>
                       ) : (<span style={{ color: t.ink3 }}>—</span>)}
                     </td>
                     <td style={{ padding: "10px 14px", textAlign: "right" }}>
