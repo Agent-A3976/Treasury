@@ -843,6 +843,85 @@ function BackfillCompareCard({ t, token, branchId, computed }) {
   );
 }
 
+// ย้ายลูกค้าคืนเครื่อง — ค้นหาสัญญาที่กำลังผ่อนอยู่ (status='active') ของรหัสนี้ในสาขานี้ พรีวิวประวัติ+ยอดรวม
+// ก่อนยืนยันเปลี่ยนเป็น returned (ใช้ InstallmentGrid ชุดเดียวกับหน้าตรวจ+ซ่อมงวด กันคำนวณคนละชุดเพี้ยนกัน)
+function CloseContractCard({ t, token, branchId }) {
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [contract, setContract] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState(false);
+  const input = mkInput(t);
+
+  async function search(e) {
+    e?.preventDefault();
+    if (!code.trim()) return;
+    setLoading(true); setErr(""); setContract(null); setHistory([]); setDone(false);
+    try {
+      const rows = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code.trim())}&branch_id=eq.${branchId}&status=eq.active&select=*`, { token });
+      if (!rows.length) { setErr("ไม่พบสัญญาที่กำลังผ่อนอยู่สำหรับรหัสนี้ในสาขานี้"); return; }
+      const c = rows[0];
+      const h = await supabaseRest(`payments?contract_id=eq.${c.contract_id}&select=*&order=installment_number.asc`, { token });
+      setContract(c); setHistory(h);
+    } catch (e2) { setErr(e2.message); }
+    finally { setLoading(false); }
+  }
+
+  async function confirmClose() {
+    setConfirming(true); setErr("");
+    try {
+      await supabaseRest(`contracts?contract_id=eq.${contract.contract_id}`, { method: "PATCH", token, body: { status: "returned" } });
+      setDone(true);
+    } catch (e) { setErr(e.message); }
+    finally { setConfirming(false); }
+  }
+
+  const totalPaid = history.reduce((s, h) => s + Number(h.amount), 0);
+  const L = contract ? maxCompletedAll(history) : 0;
+
+  return (
+    <Card t={t}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>ย้ายลูกค้าคืนเครื่อง</div>
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 12, lineHeight: 1.6 }}>ค้นหารหัสลูกค้า ตรวจสอบประวัติและยอดรวมก่อน แล้วยืนยันเปลี่ยนสถานะสัญญาเป็น "คืน/ยึดเครื่อง"</div>
+      {!done && (
+        <form onSubmit={search} style={{ display: "flex", gap: 10, marginBottom: contract ? 16 : 0 }}>
+          <input style={input} placeholder="รหัสลูกค้า เช่น 9" value={code} onChange={(e) => { setCode(e.target.value); setContract(null); }} />
+          <button type="submit" disabled={loading} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: loading ? "default" : "pointer", fontFamily: "inherit", flexShrink: 0, opacity: loading ? 0.6 : 1 }}>
+            {loading ? "กำลังค้นหา..." : "ค้นหา"}
+          </button>
+        </form>
+      )}
+      <ErrBox t={t} msg={err} />
+      {done && (
+        <div style={{ background: t.okSoft, color: t.ok, borderRadius: 8, padding: "10px 12px", fontSize: 13, fontWeight: 600 }}>
+          ย้ายสัญญา #{contract.contract_id} ({contract.device_code}) เป็น "คืน/ยึดเครื่อง" เรียบร้อยแล้ว
+        </div>
+      )}
+      {contract && !done && (
+        <div>
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13.5, background: t.surfaceAlt, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+            <div><span style={{ color: t.ink2 }}>contract_id: </span><b>{contract.contract_id}</b></div>
+            <div><span style={{ color: t.ink2 }}>เริ่ม: </span><b>{contract.start_date}</b></div>
+            <div><span style={{ color: t.ink2 }}>งวดทั้งหมด: </span><b>{contract.total_installments}</b></div>
+            <div><span style={{ color: t.ink2 }}>ยอด/งวด: </span><b>{fmt(Number(contract.amount_per_installment))}</b></div>
+            <div><span style={{ color: t.ink2 }}>ยอดจ่ายรวม: </span><b>{fmt(totalPaid)}</b></div>
+            <div><span style={{ color: t.ink2 }}>จำนวนรายการ: </span><b>{history.length}</b></div>
+          </div>
+          <InstallmentGrid t={t} contract={contract} history={history} />
+          <div style={{ background: t.warnSoft, color: t.warn, borderRadius: 8, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 12 }}>
+            จ่ายครบแล้วถึงงวดที่ {L} จาก {contract.total_installments} — ตรวจสอบให้แน่ใจก่อนยืนยันคืน/ยึดเครื่อง
+          </div>
+          <button onClick={confirmClose} disabled={confirming} style={{ background: t.ok, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: confirming ? "default" : "pointer", fontFamily: "inherit", opacity: confirming ? 0.6 : 1 }}>
+            {confirming ? "กำลังบันทึก..." : "ยืนยันย้ายเป็นคืน/ยึดเครื่อง"}
+          </button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function WRPage({ t, token, branchId, computed }) {
   const [tab, setTab] = useState("search");
   const [mode, setMode] = useState("date"); // 'date' หรือ 'code'
@@ -889,6 +968,7 @@ function WRPage({ t, token, branchId, computed }) {
       <div style={{ display: "inline-flex", gap: 4, background: t.surfaceAlt, borderRadius: 11, padding: 4, marginBottom: 20 }}>
         {tabBtn("search", "ค้นหา/ดูข้อมูล")}
         {tabBtn("import", "นำเข้าข้อมูล")}
+        {tabBtn("close", "ย้ายลูกค้าคืนเครื่อง")}
       </div>
 
       {tab === "search" && (
@@ -944,6 +1024,8 @@ function WRPage({ t, token, branchId, computed }) {
           <BackfillCompareCard t={t} token={token} branchId={branchId} computed={computed} />
         </>
       )}
+
+      {tab === "close" && <CloseContractCard t={t} token={token} branchId={branchId} />}
     </div>
   );
 }
@@ -1033,6 +1115,54 @@ function ArchivePage({ t, token, branchId }) {
  * เพราะทั้งระบบยังไม่มีปุ่มแก้ไข/บันทึกข้อมูลจริงที่ไหนเลยในตอนนี้ — แก้ไขจริงต้องทำผ่าน SQL Editor
  * ของ Supabase โดยตรงไปก่อน จนกว่าจะสร้างปุ่มแก้ไขให้)
  * ==========================================================================*/
+// แผนผังงวด — ตอบคำถาม "สัญญานี้จ่ายมาถึงงวดไหนแล้ว ขาดงวดไหน" ในภาพเดียว ใช้ logic เดียวกับที่
+// หน้าตรวจสอบใช้ตัดสินสถานะจริง (maxCompletedAll/partSum) ไม่ใช่คำนวณแยกกันคนละชุด
+function InstallmentGrid({ t, contract, history }) {
+  const L = maxCompletedAll(history); // จ่ายครบเต็มถึงงวดนี้แล้ว
+  const cells = [];
+  for (let n = 1; n <= contract.total_installments; n++) {
+    let state = "missing", label = "ยังไม่จ่าย";
+    if (n <= L) { state = "paid"; label = "จ่ายครบแล้ว"; }
+    else {
+      const partial = partSum(history, n);
+      if (partial > 0) { state = "partial"; label = `จ่ายบางส่วนแล้ว ${fmt(partial)} จาก ${fmt(Number(contract.amount_per_installment))}`; }
+      else if (n === L + 1) { state = "next"; label = "งวดถัดไปที่ต้องจ่าย"; }
+    }
+    cells.push({ n, state, label });
+  }
+  const colors = {
+    paid: { bg: t.ok, fg: "#fff" },
+    partial: { bg: t.warn, fg: "#fff" },
+    next: { bg: t.surface, fg: t.accent, border: t.accent },
+    missing: { bg: t.surfaceAlt, fg: t.ink3 },
+  };
+  return (
+    <Card t={t} style={{ marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 4 }}>แผนผังงวด</div>
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 14 }}>
+        จ่ายครบแล้วถึงงวดที่ <b style={{ color: t.ok }}>{L}</b> จากทั้งหมด {contract.total_installments} งวด
+        {L < contract.total_installments && <> — งวดถัดไปที่ต้องจ่ายคืองวดที่ <b style={{ color: t.accent }}>{L + 1}</b></>}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {cells.map((c) => (
+          <div key={c.n} title={`งวด ${c.n}: ${c.label}`} style={{
+            width: 34, height: 34, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
+            background: colors[c.state].bg, color: colors[c.state].fg,
+            border: colors[c.state].border ? `2px solid ${colors[c.state].border}` : "none",
+            fontSize: 12.5, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0,
+          }}>{c.n}</div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 16, marginTop: 14, flexWrap: "wrap", fontSize: 11.5, color: t.ink2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: t.ok, display: "inline-block" }} />จ่ายครบแล้ว</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: t.warn, display: "inline-block" }} />จ่ายบางส่วน</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: t.surface, border: `2px solid ${t.accent}`, display: "inline-block" }} />งวดถัดไป</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, borderRadius: 4, background: t.surfaceAlt, display: "inline-block" }} />ยังไม่ถึงกำหนด</div>
+      </div>
+    </Card>
+  );
+}
+
 function FixPage({ t, token, branchId }) {
   const [code, setCode] = useState("");
   const [contracts, setContracts] = useState(null);
@@ -1096,6 +1226,7 @@ function FixPage({ t, token, branchId }) {
               <div><span style={{ color: t.ink2 }}>สถานะ: </span><b>{STATUS_LABEL_TH[selected.status]}</b></div>
             </div>
           </Card>
+          <InstallmentGrid t={t} contract={selected} history={history} />
           <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
             {history.length === 0 ? (
               <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ยังไม่มีประวัติการจ่ายของสัญญานี้</div>
