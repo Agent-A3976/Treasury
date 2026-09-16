@@ -47,6 +47,7 @@ const Loader2 = (p) => <Icon {...p}><path d="M21 12a9 9 0 1 1-6.2-8.6" /></Icon>
 const AlertTriangle = (p) => <Icon {...p}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></Icon>;
 const Eye = (p) => <Icon {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></Icon>;
 const EyeOff = (p) => <Icon {...p}><path d="M17.9 17.9A10.4 10.4 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 4.2-5.2M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.6 18.6 0 0 1-2.2 3.2" /><path d="M9.5 9.5a3 3 0 0 0 4.2 4.2" /><line x1="1" y1="1" x2="23" y2="23" /></Icon>;
+const UserIcon = (p) => <Icon {...p}><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6" /></Icon>;
 
 
 /* ============================================================================
@@ -86,12 +87,15 @@ async function supabaseRest(path, { method = "GET", token, body } = {}) {
       "Content-Type": "application/json",
       apikey: SUPABASE_KEY,
       Authorization: `Bearer ${token}`,
-      ...(method === "POST" ? { Prefer: "return=representation" } : {}),
+      ...(method === "POST" || method === "PATCH" ? { Prefer: "return=representation" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message || data.error || "เรียกฐานข้อมูลไม่สำเร็จ");
+  // PATCH/DELETE ที่ไม่มี Prefer header จะได้ 204 No Content กลับมา (ตัวเปล่า) — res.json() พังถ้าเจอ
+  // body ว่าง เลยต้องเช็คก่อนเสมอ ไม่ใช่แค่ตอน error (เจอจริงตอนทดสอบหน้าตั้งค่าบัญชี PATCH users)
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error(data?.message || data?.error || "เรียกฐานข้อมูลไม่สำเร็จ");
   return data;
 }
 
@@ -121,6 +125,7 @@ const NAV = [
   { key: "wr", label: "Working Reference", icon: Database },
   { key: "archive", label: "Archive", icon: Archive },
   { key: "fix", label: "ตรวจ+ซ่อมงวด", icon: Wrench },
+  { key: "settings", label: "ตั้งค่าบัญชี", icon: UserIcon },
   { key: "admin", label: "Admin", icon: ShieldCheck, adminOnly: true },
 ];
 
@@ -342,10 +347,6 @@ async function checkRowLive(row, priorRowsInBatch, token, branchId, contractCach
 }
 const TONE_DOT = { ok: "●", warn: "●", bad: "●", info: "●", neutral: "●", loading: "○" };
 
-// สาขาที่มีข้อมูลจริงอยู่ในฐานข้อมูลตอนนี้มีแค่ "surat" (จากการย้ายข้อมูลที่ทำไปก่อนหน้า)
-// สาขาอื่นยังไม่ได้ทำ ใส่ไว้ในตัวเลือกเผื่ออนาคตแต่ตอนนี้จะไม่พบข้อมูลใดๆ
-const BRANCH_ID_MAP = { "สุราษฎร์ธานี": "surat", "สมุย": "samui", "หลังสวน": "langsuan" };
-
 // ตรวจทีละแถวตามลำดับ (ไม่ขนาน) เพราะการเช็ค "ซ้ำในรายการตรวจ" ต้องรู้ผลของแถวก่อนหน้า
 // ก่อนเสมอ — cache ผลค้นหาสัญญา+ประวัติต่อรหัสไว้ใน session เดียวกัน ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว
 function useComputedRows(rows, token, branchId, checkDate) {
@@ -353,7 +354,7 @@ function useComputedRows(rows, token, branchId, checkDate) {
   const contractCache = useRef(new Map());
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !branchId) return;
     let cancelled = false;
     contractCache.current = new Map();
     (async () => {
@@ -1519,6 +1520,109 @@ function LoginScreen({ t, mode, setMode, onAuthed }) {
   );
 }
 
+/* ============================================================================
+ * ตั้งค่าบัญชี (self-service) — แก้ชื่อเล่น/รูปโปรไฟล์/เบอร์/อีเมลติดต่อของตัวเอง
+ * ไม่แตะ is_admin/is_active ในหน้านี้เลย (ฝั่ง DB มี trigger protect_admin_fields
+ * กันไว้อีกชั้นด้วย เผื่อมีทางเขียนอื่นนอกจากหน้านี้)
+ * ==========================================================================*/
+async function uploadAvatarFile(token, userId, file) {
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${userId}/avatar.${ext}`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/avatars/${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${token}`,
+      "x-upsert": "true",
+    },
+    body: file,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.error || "อัปโหลดรูปไม่สำเร็จ");
+  return `${SUPABASE_URL}/storage/v1/object/public/avatars/${path}?v=${Date.now()}`;
+}
+
+function AccountSettingsPage({ t, token, profile, onSaved }) {
+  const [nickname, setNickname] = useState(profile.nickname || "");
+  const [phone, setPhone] = useState(profile.phone || "");
+  const [contactEmail, setContactEmail] = useState(profile.contact_email || "");
+  const [avatarUrl, setAvatarUrl] = useState(profile.avatar_url || "");
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(profile.avatar_url || "");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [saved, setSaved] = useState(false);
+  const input = mkInput(t), label = mkLabel(t);
+
+  function pickFile(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+    setSaved(false);
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    setSaving(true); setErr(""); setSaved(false);
+    try {
+      let nextAvatarUrl = avatarUrl;
+      if (file) nextAvatarUrl = await uploadAvatarFile(token, profile.user_id, file);
+      const [updated] = await supabaseRest(`users?user_id=eq.${profile.user_id}`, {
+        method: "PATCH", token,
+        body: {
+          nickname: nickname.trim() || null,
+          phone: phone.trim() || null,
+          contact_email: contactEmail.trim() || null,
+          avatar_url: nextAvatarUrl || null,
+        },
+      });
+      setAvatarUrl(nextAvatarUrl);
+      setFile(null);
+      setSaved(true);
+      // อัปเดต state โปรไฟล์ที่ parent ถืออยู่ตรงๆ จากแถวที่ PATCH คืนมา — ไม่เรียก loadProfile()
+      // ซ้ำ เพราะจะไป trigger profileLoading=true ทำให้ทั้งหน้ารีเมาท์ใหม่ (state "บันทึกแล้ว" หาย
+      // ไปทันทีก่อนจะทันเห็น)
+      onSaved?.(updated);
+    } catch (e2) { setErr(e2.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div>
+      <PageHeader t={t} title="ตั้งค่าบัญชี" sub="แก้ไขข้อมูลส่วนตัวของบัญชีตัวเอง — เปลี่ยนสิทธิ์ใช้งานได้เฉพาะแอดมินเท่านั้น" />
+      <Card t={t} style={{ maxWidth: 480 }}>
+        <form onSubmit={save}>
+          <div style={{ fontSize: 12.5, color: t.ink2, marginBottom: 18 }}>
+            รหัสผู้ใช้: <b style={{ color: t.ink }}>{profile.username}</b> — สิทธิ์: <b style={{ color: t.ink }}>{profile.is_admin ? "Admin" : "พนักงาน"}</b>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+            <div style={{ width: 64, height: 64, borderRadius: 99, background: t.infoSoft, color: t.info, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, overflow: "hidden", flexShrink: 0 }}>
+              {preview ? <img src={preview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : (nickname || profile.username || "?")[0].toUpperCase()}
+            </div>
+            <div>
+              <label style={{ ...label, marginBottom: 8 }}>รูปโปรไฟล์</label>
+              <input type="file" accept="image/*" onChange={pickFile} style={{ fontSize: 12.5, color: t.ink2 }} />
+            </div>
+          </div>
+          <label style={label}>ชื่อเล่น</label>
+          <input style={{ ...input, marginBottom: 14 }} value={nickname} onChange={(e) => setNickname(e.target.value)} placeholder="เช่น ปิม" />
+          <label style={label}>เบอร์โทร</label>
+          <input style={{ ...input, marginBottom: 14 }} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="เช่น 081-234-5678" />
+          <label style={label}>อีเมลติดต่อ</label>
+          <input type="email" style={{ ...input, marginBottom: 14 }} value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="เช่น name@example.com" />
+          <ErrBox t={t} msg={err} />
+          {saved && <div style={{ background: t.okSoft, color: t.ok, borderRadius: 8, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>บันทึกข้อมูลแล้ว</div>}
+          <button type="submit" disabled={saving} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: saving ? "default" : "pointer", fontFamily: "inherit", opacity: saving ? 0.6 : 1 }}>
+            {saving ? "กำลังบันทึก..." : "บันทึก"}
+          </button>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
 function CheckPage() {
   const [mode, setMode] = useState("dark");
   const t = THEME[mode];
@@ -1563,7 +1667,8 @@ function CheckPage() {
   const [form, setForm] = useState({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
   const [showExtra, setShowExtra] = useState(false);
   const [search, setSearch] = useState("");
-  const [branch, setBranch] = useState("สุราษฎร์ธานี");
+  const [branchList, setBranchList] = useState([]);
+  const [branchId, setBranchId] = useState("");
   const [checkDate, setCheckDate] = useState(() => new Date().toISOString().slice(0, 10));
   const nextId = useRef(rows.reduce((m, r) => Math.max(m, r.id || 0), 0) + 1);
   const periodRef = useRef(null);
@@ -1573,7 +1678,29 @@ function CheckPage() {
     try { localStorage.setItem(LOCAL_KEY, JSON.stringify(rows)); } catch {}
   }, [rows]);
 
-  const computed = useComputedRows(rows, session?.access_token, BRANCH_ID_MAP[branch], checkDate);
+  // โหลดรายชื่อสาขาจริงจาก DB แทนลิสต์ hardcode เดิม — แอดมินเห็นทุกสาขาที่เปิดใช้งาน
+  // ส่วนพนักงานทั่วไปเห็นเฉพาะสาขาที่ถูกมอบหมายผ่าน user_branches (หน้า Admin)
+  useEffect(() => {
+    if (!session || !profile) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const active = await supabaseRest(`branches?is_active=eq.true&select=*&order=branch_name.asc`, { token: session.access_token });
+        let allowed = active;
+        if (!profile.is_admin) {
+          const ub = await supabaseRest(`user_branches?user_id=eq.${profile.user_id}&select=branch_id`, { token: session.access_token });
+          const ids = new Set(ub.map((r) => r.branch_id));
+          allowed = active.filter((b) => ids.has(b.branch_id));
+        }
+        if (cancelled) return;
+        setBranchList(allowed);
+        setBranchId((prev) => (prev && allowed.some((b) => b.branch_id === prev) ? prev : allowed[0]?.branch_id || ""));
+      } catch { if (!cancelled) setBranchList([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [session, profile]);
+
+  const computed = useComputedRows(rows, session?.access_token, branchId, checkDate);
   const filtered = computed.filter((r) => {
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
@@ -1653,7 +1780,7 @@ function CheckPage() {
           </div>
           <div>
             <div style={{ color: "#fff", fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>ตรวจค่างวด</div>
-            <div style={{ color: t.sidebarInkMute, fontSize: 10.5 }}>สุราษฎร์ธานี</div>
+            <div style={{ color: t.sidebarInkMute, fontSize: 10.5 }}>{branchList.find((b) => b.branch_id === branchId)?.branch_name || "..."}</div>
           </div>
         </div>
 
@@ -1679,8 +1806,10 @@ function CheckPage() {
         </nav>
 
         <div style={{ marginTop: "auto", paddingTop: 16, borderTop: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 9 }}>
-          <div style={{ width: 28, height: 28, borderRadius: 99, background: t.infoSoft, color: t.info, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-            {(profile.nickname || profile.username || "?")[0].toUpperCase()}
+          <div style={{ width: 28, height: 28, borderRadius: 99, background: t.infoSoft, color: t.info, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0, overflow: "hidden" }}>
+            {profile.avatar_url
+              ? <img src={profile.avatar_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              : (profile.nickname || profile.username || "?")[0].toUpperCase()}
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ color: "#fff", fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile.nickname || profile.username}</div>
@@ -1700,8 +1829,10 @@ function CheckPage() {
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ position: "relative" }}>
-              <select value={branch} onChange={(e) => setBranch(e.target.value)} style={{ appearance: "none", padding: "8px 30px 8px 12px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, color: t.ink, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
-                <option>สุราษฎร์ธานี</option><option>สมุย</option><option>หลังสวน</option>
+              <select value={branchId} onChange={(e) => setBranchId(e.target.value)} disabled={branchList.length === 0} style={{ appearance: "none", padding: "8px 30px 8px 12px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, color: t.ink, fontSize: 13, fontFamily: "inherit", cursor: branchList.length ? "pointer" : "default" }}>
+                {branchList.length === 0
+                  ? <option value="">ไม่มีสาขาที่เข้าถึงได้</option>
+                  : branchList.map((b) => <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>)}
               </select>
               <ChevronDown size={14} style={{ position: "absolute", right: 10, top: 10, color: t.ink2, pointerEvents: "none" }} />
             </div>
@@ -1827,9 +1958,10 @@ function CheckPage() {
         )}
 
         {active === "dashboard" && <DashboardPage t={t} computed={computed} />}
-        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} computed={computed} />}
-        {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
-        {active === "fix" && <FixPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
+        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={branchId} computed={computed} />}
+        {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={branchId} />}
+        {active === "fix" && <FixPage t={t} token={session.access_token} branchId={branchId} />}
+        {active === "settings" && <AccountSettingsPage t={t} token={session.access_token} profile={profile} onSaved={(updated) => setProfile(updated)} />}
         {active === "admin" && (
           profile.is_admin
             ? <AdminPage t={t} token={session.access_token} />
