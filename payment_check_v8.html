@@ -44,6 +44,7 @@ const ShieldCheck = (p) => <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 
 const Wallet = (p) => <Icon {...p}><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16v-5" /><path d="M18 12a2 2 0 0 0 0 4h4v-4z" /></Icon>;
 const LogOut = (p) => <Icon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></Icon>;
 const Loader2 = (p) => <Icon {...p}><path d="M21 12a9 9 0 1 1-6.2-8.6" /></Icon>;
+const AlertTriangle = (p) => <Icon {...p}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></Icon>;
 const Eye = (p) => <Icon {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></Icon>;
 const EyeOff = (p) => <Icon {...p}><path d="M17.9 17.9A10.4 10.4 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 4.2-5.2M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.6 18.6 0 0 1-2.2 3.2" /><path d="M9.5 9.5a3 3 0 0 0 4.2 4.2" /><line x1="1" y1="1" x2="23" y2="23" /></Icon>;
 
@@ -120,7 +121,7 @@ const NAV = [
   { key: "wr", label: "Working Reference", icon: Database },
   { key: "archive", label: "Archive", icon: Archive },
   { key: "fix", label: "ตรวจ+ซ่อมงวด", icon: Wrench },
-  { key: "admin", label: "Admin", icon: ShieldCheck },
+  { key: "admin", label: "Admin", icon: ShieldCheck, adminOnly: true },
 ];
 
 /* ============================================================================
@@ -279,6 +280,33 @@ async function nestedStatus(contract, p, C, history) {
 async function checkRowLive(row, priorRowsInBatch, token, branchId, contractCache, checkDate) {
   const code = row.code.trim();
   const amount = parseFloat(row.amount);
+  const hasAmount = row.amount && row.amount.trim() !== "";
+  const hasFee = row.fee && row.fee.trim() !== "";
+  const hasCum = row.cum && row.cum.trim() !== "";
+  const hasPeriod = row.period && row.period.trim() !== "";
+
+  const allEmpty = !code && !hasPeriod && !hasAmount && !hasFee && !hasCum;
+  if (allEmpty) return { status: "", tone: "neutral" };
+
+  // แถวที่มีแค่ "ค่าธรรมเนียม" และ/หรือ "สะสม" โดยไม่มีงวด/จำนวนเงิน — เป็นรายการพิเศษที่ไม่ผูก
+  // เข้าสถานะสัญญาปกติ (นับรวมยอดวันนั้นได้ แต่ไม่ตรวจซ้ำ/ไม่บันทึกเข้าประวัติการจ่ายงวด) ย้ายมา
+  // จากระบบเดิมทั้งชุด ต้องเช็คคู่ค่าธรรมเนียม+สะสมก่อนเช็คแยกทีละอย่าง ไม่งั้นยอดสะสมจะหายไปเงียบๆ
+  const feeCumOnly = !hasPeriod && !hasAmount && hasFee && hasCum;
+  if (feeCumOnly) {
+    const note = code
+      ? `ค่าธรรมเนียม+สะสมเพิ่มเติมผูกกับรหัสลูกค้า ${code} (ไม่บันทึกเข้าประวัติงวด)`
+      : "รายการค่าธรรมเนียม+สะสมพร้อมกัน ไม่ผูกกับรหัสลูกค้า";
+    return { status: "ค่าธรรมเนียม+สะสมเพิ่มเติม", tone: "info", note, feeAmount: parseFloat(row.fee) || 0, cumAmount: parseFloat(row.cum) || 0 };
+  }
+  if (!hasPeriod && !hasAmount && !hasFee && hasCum) {
+    const note = code ? `สะสมเพิ่มเติมผูกกับรหัสลูกค้า ${code} (ไม่บันทึกเข้าประวัติงวด)` : "รายการยอดสะสมเดี่ยว ไม่ผูกกับรหัสลูกค้า";
+    return { status: "สะสมเพิ่มเติม", tone: "info", note, amount: parseFloat(row.cum) || 0 };
+  }
+  if (!hasPeriod && !hasAmount && hasFee) {
+    const note = code ? `ค่าธรรมเนียมเพิ่มเติมผูกกับรหัสลูกค้า ${code} (ไม่บันทึกเข้าประวัติงวด)` : "รายการค่าธรรมเนียมเดี่ยว ไม่ผูกกับรหัสลูกค้า";
+    return { status: "ค่าธรรมเนียมเพิ่มเติม", tone: "info", note, amount: parseFloat(row.fee) || 0 };
+  }
+
   if (!code || !row.period || !row.amount) return { status: "", tone: "neutral" };
 
   const dupInBatch = priorRowsInBatch.some(
@@ -355,6 +383,512 @@ async function resolveEmailForUsername(username) {
   const email = await supabaseRpc("get_email_for_username", { p_username: username.trim() });
   if (!email) throw new Error("ไม่พบรหัสผู้ใช้นี้ในระบบ");
   return email;
+}
+
+/* ============================================================================
+ * ตัวช่วยสไตล์ใช้ร่วมกันหลายหน้า (แยกจาก CheckPage เพราะ component พวกนี้อยู่นอกฟังก์ชันนั้น)
+ * ==========================================================================*/
+function mkInput(t) {
+  return { width: "100%", padding: "9px 11px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, color: t.ink, fontSize: 14, fontFamily: "'IBM Plex Mono', monospace", outline: "none", boxSizing: "border-box" };
+}
+function mkLabel(t) {
+  return { fontSize: 12, color: t.ink2, marginBottom: 5, display: "block", fontWeight: 500 };
+}
+function PageHeader({ t, title, sub }) {
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <h1 style={{ fontSize: 21, fontWeight: 700, margin: "0 0 3px", letterSpacing: -0.3 }}>{title}</h1>
+      {sub && <div style={{ fontSize: 12.5, color: t.ink2 }}>{sub}</div>}
+    </div>
+  );
+}
+function Card({ t, children, style }) {
+  return <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: 18, boxShadow: t.shadow, ...style }}>{children}</div>;
+}
+function ErrBox({ t, msg }) {
+  if (!msg) return null;
+  return <div style={{ background: t.badSoft, color: t.bad, borderRadius: 8, padding: "10px 12px", fontSize: 12.5, marginBottom: 14 }}>{msg}</div>;
+}
+function Loading({ t }) {
+  return <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Loader2 size={15} className="spin" /> กำลังโหลด...</div>;
+}
+const STATUS_LABEL_TH = { active: "ผ่อนอยู่", closed: "ผ่อนจบ", returned: "คืน/ยึดเครื่อง" };
+
+/* ============================================================================
+ * Dashboard — สรุปภาพรวมสัญญาของสาขาที่เลือก
+ * ==========================================================================*/
+function DashboardPage({ t, token, branchId }) {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchResult, setSearchResult] = useState(null);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!token || !branchId) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setErr("");
+      try {
+        const [active, closed, returned] = await Promise.all([
+          supabaseRest(`contracts?branch_id=eq.${branchId}&status=eq.active&select=contract_id`, { token }),
+          supabaseRest(`contracts?branch_id=eq.${branchId}&status=eq.closed&select=contract_id`, { token }),
+          supabaseRest(`contracts?branch_id=eq.${branchId}&status=eq.returned&select=contract_id`, { token }),
+        ]);
+        if (cancelled) return;
+        setStats({ active: active.length, closed: closed.length, returned: returned.length });
+      } catch (e) { if (!cancelled) setErr(e.message); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [token, branchId]);
+
+  async function doSearch(e) {
+    e.preventDefault();
+    if (!search.trim()) return;
+    setSearching(true); setSearchResult(null); setErr("");
+    try {
+      const contracts = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(search.trim())}&branch_id=eq.${branchId}&select=*&order=start_date.desc`, { token });
+      setSearchResult(contracts);
+    } catch (e2) { setErr(e2.message); }
+    finally { setSearching(false); }
+  }
+
+  const input = mkInput(t), label = mkLabel(t);
+  const statCard = (icon, lbl, value, tone) => (
+    <Card t={t} style={{ flex: 1, minWidth: 140 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: t.ink2, fontWeight: 500 }}>{lbl}</span>
+        <div style={{ width: 26, height: 26, borderRadius: 8, background: t[tone + "Soft"], display: "flex", alignItems: "center", justifyContent: "center" }}>{icon}</div>
+      </div>
+      <div style={{ fontSize: 24, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{value}</div>
+    </Card>
+  );
+
+  return (
+    <div>
+      <PageHeader t={t} title="Dashboard" sub="ภาพรวมสัญญาของสาขาที่เลือกไว้" />
+      <ErrBox t={t} msg={err} />
+      {loading ? <Loading t={t} /> : stats && (
+        <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+          {statCard(<ClipboardCheck size={13} color={t.ok} />, "ผ่อนอยู่ (active)", stats.active, "ok")}
+          {statCard(<Archive size={13} color={t.neutral} />, "ผ่อนจบ (closed)", stats.closed, "neutral")}
+          {statCard(<AlertTriangle size={13} color={t.warn} />, "คืน/ยึดเครื่อง", stats.returned, "warn")}
+          {statCard(<Database size={13} color={t.accent} />, "รวมทั้งหมด", stats.active + stats.closed + stats.returned, "accent")}
+        </div>
+      )}
+      <Card t={t}>
+        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 12 }}>ค้นหาสัญญาด้วยรหัสลูกค้า</div>
+        <form onSubmit={doSearch} style={{ display: "flex", gap: 10, marginBottom: searchResult ? 16 : 0 }}>
+          <input style={input} placeholder="เช่น 9" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <button type="submit" disabled={searching} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>ค้นหา</button>
+        </form>
+        {searchResult && (
+          searchResult.length === 0 ? <div style={{ color: t.ink3, fontSize: 13 }}>ไม่พบรหัสนี้ในสาขาที่เลือก</div> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {searchResult.map((c) => (
+                <div key={c.contract_id} style={{ border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>#{c.contract_id}</span>
+                  <span style={{ fontSize: 12.5, color: t.ink2 }}>เริ่ม {c.start_date}</span>
+                  <span style={{ fontSize: 12.5, color: t.ink2 }}>{c.total_installments} งวด × {Number(c.amount_per_installment).toLocaleString()} บาท</span>
+                  <span style={{ marginLeft: "auto", background: t[(c.status === "active" ? "ok" : c.status === "closed" ? "neutral" : "warn") + "Soft"], color: t[c.status === "active" ? "ok" : c.status === "closed" ? "neutral" : "warn"], borderRadius: 99, padding: "3px 10px", fontSize: 11.5, fontWeight: 600 }}>{STATUS_LABEL_TH[c.status]}</span>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * Working Reference — ประวัติการจ่ายเงินล่าสุด ค้นหาตามรหัสลูกค้า หรือดูตามวันที่
+ * ==========================================================================*/
+function WRPage({ t, token, branchId }) {
+  const [mode, setMode] = useState("date"); // 'date' หรือ 'code'
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [code, setCode] = useState("");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function runDateSearch() {
+    setLoading(true); setErr(""); setRows([]);
+    try {
+      const data = await supabaseRest(`payments?payment_date=eq.${date}&select=payment_id,contract_id,installment_number,payment_type,amount,payment_date&order=payment_id.desc&limit=300`, { token });
+      setRows(data);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+  async function runCodeSearch(e) {
+    e?.preventDefault();
+    if (!code.trim()) return;
+    setLoading(true); setErr(""); setRows([]);
+    try {
+      const contracts = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code.trim())}&branch_id=eq.${branchId}&select=contract_id`, { token });
+      if (!contracts.length) { setErr("ไม่พบรหัสนี้ในสาขาที่เลือก"); return; }
+      const ids = contracts.map((c) => c.contract_id).join(",");
+      const data = await supabaseRest(`payments?contract_id=in.(${ids})&select=payment_id,contract_id,installment_number,payment_type,amount,payment_date&order=payment_date.desc`, { token });
+      setRows(data);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  useEffect(() => { if (token && mode === "date") runDateSearch(); }, [token, date, mode]);
+
+  const input = mkInput(t), label = mkLabel(t);
+  return (
+    <div>
+      <PageHeader t={t} title="Working Reference" sub="ประวัติการรับชำระเงินที่บันทึกไว้จริงในฐานข้อมูล" />
+      <Card t={t} style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <button onClick={() => setMode("date")} style={{ background: mode === "date" ? t.accent : "transparent", color: mode === "date" ? t.accentInk : t.ink, border: `1px solid ${mode === "date" ? t.accent : t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>ดูตามวันที่</button>
+          <button onClick={() => setMode("code")} style={{ background: mode === "code" ? t.accent : "transparent", color: mode === "code" ? t.accentInk : t.ink, border: `1px solid ${mode === "code" ? t.accent : t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>ค้นหาตามรหัสลูกค้า</button>
+        </div>
+        {mode === "date" ? (
+          <div style={{ maxWidth: 200 }}>
+            <label style={label}>วันที่</label>
+            <input type="date" style={input} value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+        ) : (
+          <form onSubmit={runCodeSearch} style={{ display: "flex", gap: 10 }}>
+            <input style={input} placeholder="รหัสลูกค้า เช่น 9" value={code} onChange={(e) => setCode(e.target.value)} />
+            <button type="submit" style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>ค้นหา</button>
+          </form>
+        )}
+      </Card>
+      <ErrBox t={t} msg={err} />
+      <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
+        {loading ? <Loading t={t} /> : rows.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+            <thead><tr style={{ background: t.surfaceAlt }}>
+              {["contract_id", "งวดที่", "ประเภท", "จำนวนเงิน", "วันที่จ่าย"].map((h, i) => (
+                <th key={i} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.payment_id} style={{ borderTop: `1px solid ${t.border}` }}>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.contract_id}</td>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.installment_number}</td>
+                  <td style={{ padding: "9px 14px" }}>{r.payment_type || "—"}</td>
+                  <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{Number(r.amount).toLocaleString()}</td>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.payment_date}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * Archive — สัญญาที่ปิดแล้ว (ผ่อนจบ/คืนเครื่อง/ยึดเครื่อง) ของสาขาที่เลือก
+ * ==========================================================================*/
+function ArchivePage({ t, token, branchId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  useEffect(() => {
+    if (!token || !branchId) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setErr("");
+      try {
+        const data = await supabaseRest(`contracts?branch_id=eq.${branchId}&status=neq.active&select=*&order=start_date.desc&limit=500`, { token });
+        if (!cancelled) setRows(data);
+      } catch (e) { if (!cancelled) setErr(e.message); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [token, branchId]);
+
+  const filtered = rows.filter((r) => {
+    if (statusFilter !== "all" && r.status !== statusFilter) return false;
+    if (search.trim() && !r.device_code.toLowerCase().includes(search.trim().toLowerCase())) return false;
+    return true;
+  });
+
+  const input = mkInput(t);
+  return (
+    <div>
+      <PageHeader t={t} title="Archive" sub="สัญญาที่ปิดแล้ว (ผ่อนจบ / คืนเครื่อง / ยึดเครื่อง)" />
+      <Card t={t} style={{ marginBottom: 16, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <label style={mkLabel(t)}>ค้นหารหัสลูกค้า</label>
+          <input style={input} placeholder="เช่น 9" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div style={{ minWidth: 160 }}>
+          <label style={mkLabel(t)}>สถานะ</label>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ ...input, cursor: "pointer" }}>
+            <option value="all">ทั้งหมด</option>
+            <option value="closed">ผ่อนจบ</option>
+            <option value="returned">คืน/ยึดเครื่อง</option>
+          </select>
+        </div>
+      </Card>
+      <ErrBox t={t} msg={err} />
+      <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
+        {loading ? <Loading t={t} /> : filtered.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+            <thead><tr style={{ background: t.surfaceAlt }}>
+              {["contract_id", "รหัสลูกค้า", "วันที่เริ่ม", "งวด", "ยอด/งวด", "สถานะ"].map((h, i) => (
+                <th key={i} style={{ textAlign: i === 4 ? "right" : "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {filtered.map((c) => (
+                <tr key={c.contract_id} style={{ borderTop: `1px solid ${t.border}` }}>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{c.contract_id}</td>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{c.device_code}</td>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{c.start_date}</td>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{c.total_installments}</td>
+                  <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{Number(c.amount_per_installment).toLocaleString()}</td>
+                  <td style={{ padding: "9px 14px" }}>
+                    <span style={{ background: t[(c.status === "closed" ? "neutral" : "warn") + "Soft"], color: t[c.status === "closed" ? "neutral" : "warn"], borderRadius: 99, padding: "3px 10px", fontSize: 11.5, fontWeight: 600 }}>{STATUS_LABEL_TH[c.status]}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * ตรวจ+ซ่อมงวด — ค้นหาสัญญา ดูประวัติการจ่ายทั้งหมดเพื่อวินิจฉัยปัญหา (ยังเป็นโหมดดูอย่างเดียว
+ * เพราะทั้งระบบยังไม่มีปุ่มแก้ไข/บันทึกข้อมูลจริงที่ไหนเลยในตอนนี้ — แก้ไขจริงต้องทำผ่าน SQL Editor
+ * ของ Supabase โดยตรงไปก่อน จนกว่าจะสร้างปุ่มแก้ไขให้)
+ * ==========================================================================*/
+function FixPage({ t, token, branchId }) {
+  const [code, setCode] = useState("");
+  const [contracts, setContracts] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function search(e) {
+    e.preventDefault();
+    if (!code.trim()) return;
+    setLoading(true); setErr(""); setContracts(null); setSelected(null); setHistory([]);
+    try {
+      const rows = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code.trim())}&branch_id=eq.${branchId}&select=*&order=start_date.desc`, { token });
+      setContracts(rows);
+      if (rows.length === 1) selectContract(rows[0]);
+    } catch (e2) { setErr(e2.message); }
+    finally { setLoading(false); }
+  }
+  async function selectContract(c) {
+    setSelected(c); setHistory([]); setErr("");
+    try {
+      const h = await supabaseRest(`payments?contract_id=eq.${c.contract_id}&select=*&order=installment_number.asc`, { token });
+      setHistory(h);
+    } catch (e) { setErr(e.message); }
+  }
+
+  const input = mkInput(t);
+  return (
+    <div>
+      <PageHeader t={t} title="ตรวจ + ซ่อมงวด" sub="ค้นหาสัญญาเพื่อดูประวัติการจ่ายทั้งหมด ใช้วินิจฉัยปัญหา (ยังดูได้อย่างเดียว แก้ไขยังไม่เปิดใช้)" />
+      <Card t={t} style={{ marginBottom: 16 }}>
+        <form onSubmit={search} style={{ display: "flex", gap: 10 }}>
+          <input style={input} placeholder="รหัสลูกค้า เช่น 331" value={code} onChange={(e) => setCode(e.target.value)} />
+          <button type="submit" style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>ค้นหา</button>
+        </form>
+      </Card>
+      <ErrBox t={t} msg={err} />
+      {loading && <Loading t={t} />}
+      {contracts && contracts.length === 0 && <div style={{ color: t.ink3, fontSize: 13.5 }}>ไม่พบรหัสนี้ในสาขาที่เลือก</div>}
+      {contracts && contracts.length > 1 && !selected && (
+        <Card t={t}>
+          <div style={{ fontSize: 13, color: t.ink2, marginBottom: 10 }}>รหัสนี้ถูกใช้ซ้ำ {contracts.length} สัญญา — เลือกสัญญาที่ต้องการดู</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {contracts.map((c) => (
+              <button key={c.contract_id} onClick={() => selectContract(c)} style={{ textAlign: "left", background: t.surfaceAlt, border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, cursor: "pointer", fontFamily: "inherit", color: t.ink }}>
+                #{c.contract_id} — เริ่ม {c.start_date} — {c.total_installments} งวด × {Number(c.amount_per_installment).toLocaleString()} — {STATUS_LABEL_TH[c.status]}
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
+      {selected && (
+        <>
+          <Card t={t} style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 13.5 }}>
+              <div><span style={{ color: t.ink2 }}>contract_id: </span><b>{selected.contract_id}</b></div>
+              <div><span style={{ color: t.ink2 }}>เริ่ม: </span><b>{selected.start_date}</b></div>
+              <div><span style={{ color: t.ink2 }}>งวดทั้งหมด: </span><b>{selected.total_installments}</b></div>
+              <div><span style={{ color: t.ink2 }}>ยอด/งวด: </span><b>{Number(selected.amount_per_installment).toLocaleString()}</b></div>
+              <div><span style={{ color: t.ink2 }}>สถานะ: </span><b>{STATUS_LABEL_TH[selected.status]}</b></div>
+            </div>
+          </Card>
+          <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
+            {history.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ยังไม่มีประวัติการจ่ายของสัญญานี้</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+                <thead><tr style={{ background: t.surfaceAlt }}>
+                  {["งวดที่", "ประเภท", "จำนวนเงิน", "วันที่จ่าย"].map((h, i) => (
+                    <th key={i} style={{ textAlign: i === 2 ? "right" : "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {history.map((h) => (
+                    <tr key={h.payment_id} style={{ borderTop: `1px solid ${t.border}` }}>
+                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{h.installment_number}</td>
+                      <td style={{ padding: "9px 14px" }}>{h.payment_type || "—"}</td>
+                      <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{Number(h.amount).toLocaleString()}</td>
+                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{h.payment_date}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================================
+ * Admin — อนุมัติบัญชีใหม่ + จัดการสิทธิ์ผู้ใช้ (เห็นหน้านี้เฉพาะแอดมินเท่านั้น)
+ * ==========================================================================*/
+function AdminPage({ t, token }) {
+  const [users, setUsers] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [userBranches, setUserBranches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [busyId, setBusyId] = useState(null);
+
+  async function load() {
+    setLoading(true); setErr("");
+    try {
+      const [u, b, ub] = await Promise.all([
+        supabaseRest(`users?select=*&order=created_at.desc`, { token }),
+        supabaseRest(`branches?select=*`, { token }),
+        supabaseRest(`user_branches?select=*`, { token }),
+      ]);
+      setUsers(u); setBranches(b); setUserBranches(ub);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { if (token) load(); }, [token]);
+
+  async function toggleActive(u) {
+    setBusyId(u.user_id); setErr("");
+    try {
+      await supabaseRest(`users?user_id=eq.${u.user_id}`, { method: "PATCH", token, body: { is_active: !u.is_active } });
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setBusyId(null); }
+  }
+  async function toggleAdmin(u) {
+    setBusyId(u.user_id); setErr("");
+    try {
+      await supabaseRest(`users?user_id=eq.${u.user_id}`, { method: "PATCH", token, body: { is_admin: !u.is_admin } });
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setBusyId(null); }
+  }
+  async function assignBranch(u, branchId) {
+    if (!branchId) return;
+    setBusyId(u.user_id); setErr("");
+    try {
+      await supabaseRest(`user_branches`, { method: "POST", token, body: { user_id: u.user_id, branch_id: branchId } });
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setBusyId(null); }
+  }
+
+  const pending = users.filter((u) => !u.is_active);
+  const activeUsers = users.filter((u) => u.is_active);
+  const branchesOf = (userId) => userBranches.filter((ub) => ub.user_id === userId).map((ub) => ub.branch_id);
+
+  const rowBtn = { background: "transparent", border: `1px solid ${t.border}`, color: t.ink, borderRadius: 7, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" };
+
+  return (
+    <div>
+      <PageHeader t={t} title="Admin" sub="อนุมัติบัญชีใหม่ และจัดการสิทธิ์ผู้ใช้ทั้งหมด" />
+      <ErrBox t={t} msg={err} />
+      {loading ? <Loading t={t} /> : (
+        <>
+          {pending.length > 0 && (
+            <Card t={t} style={{ marginBottom: 16, borderColor: t.warn }}>
+              <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 12, color: t.warn, display: "flex", alignItems: "center", gap: 7 }}>
+                <AlertTriangle size={15} /> รออนุมัติ ({pending.length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {pending.map((u) => (
+                  <div key={u.user_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: t.warnSoft, borderRadius: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 600 }}>{u.username}</span>
+                    <span style={{ fontSize: 11.5, color: t.ink3 }}>สมัครเมื่อ {new Date(u.created_at).toLocaleDateString("th-TH")}</span>
+                    <button onClick={() => toggleActive(u)} disabled={busyId === u.user_id} style={{ ...rowBtn, marginLeft: "auto", background: t.ok, color: "#fff", border: "none", fontWeight: 600 }}>
+                      {busyId === u.user_id ? "..." : "อนุมัติ"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+          <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: `1px solid ${t.border}`, fontWeight: 600, fontSize: 14.5 }}>ผู้ใช้ทั้งหมด ({activeUsers.length} คนใช้งานอยู่)</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+              <thead><tr style={{ background: t.surfaceAlt }}>
+                {["รหัสผู้ใช้", "สาขาที่เข้าถึงได้", "แอดมิน", "สถานะ", ""].map((h, i) => (
+                  <th key={i} style={{ textAlign: "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.user_id} style={{ borderTop: `1px solid ${t.border}` }}>
+                    <td style={{ padding: "9px 14px", fontWeight: 600 }}>{u.username}</td>
+                    <td style={{ padding: "9px 14px" }}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        {branchesOf(u.user_id).map((bid) => (
+                          <span key={bid} style={{ background: t.accentSoft, color: t.accent, borderRadius: 99, padding: "2px 8px", fontSize: 11 }}>{bid}</span>
+                        ))}
+                        <select defaultValue="" onChange={(e) => { assignBranch(u, e.target.value); e.target.value = ""; }} style={{ fontSize: 11, border: `1px solid ${t.border}`, borderRadius: 6, background: t.surface, color: t.ink2, padding: "2px 4px", fontFamily: "inherit" }}>
+                          <option value="">+ เพิ่มสาขา</option>
+                          {branches.filter((b) => !branchesOf(u.user_id).includes(b.branch_id)).map((b) => (
+                            <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </td>
+                    <td style={{ padding: "9px 14px" }}>
+                      <button onClick={() => toggleAdmin(u)} disabled={busyId === u.user_id} style={{ ...rowBtn, color: u.is_admin ? t.accent : t.ink3, borderColor: u.is_admin ? t.accent : t.border }}>{u.is_admin ? "แอดมิน" : "พนักงาน"}</button>
+                    </td>
+                    <td style={{ padding: "9px 14px" }}>
+                      <span style={{ background: t[(u.is_active ? "ok" : "warn") + "Soft"], color: t[u.is_active ? "ok" : "warn"], borderRadius: 99, padding: "3px 10px", fontSize: 11.5, fontWeight: 600 }}>{u.is_active ? "ใช้งานอยู่" : "รออนุมัติ"}</span>
+                    </td>
+                    <td style={{ padding: "9px 14px" }}>
+                      <button onClick={() => toggleActive(u)} disabled={busyId === u.user_id} style={rowBtn}>{u.is_active ? "ปิดสิทธิ์" : "เปิดสิทธิ์"}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
+    </div>
+  );
 }
 
 function LoginScreen({ t, mode, setMode, onAuthed }) {
@@ -633,7 +1167,7 @@ function CheckPage() {
         </div>
 
         <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          {NAV.map((n) => {
+          {NAV.filter((n) => !n.adminOnly || profile.is_admin).map((n) => {
             const isActive = active === n.key;
             return (
               <button
@@ -690,6 +1224,8 @@ function CheckPage() {
           </div>
         </div>
 
+        {active === "check" && (
+        <>
         <h1 style={{ fontSize: 21, fontWeight: 700, margin: "0 0 3px", letterSpacing: -0.3 }}>ตรวจสอบการรับชำระเงิน</h1>
         <div style={{ fontSize: 12.5, color: t.ink2, marginBottom: 20, display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ position: "relative", width: 7, height: 7, borderRadius: 99, background: t.ok, display: "inline-block" }}>
@@ -770,7 +1306,7 @@ function CheckPage() {
               </thead>
               <tbody>
                 {filtered.map((r, idx) => (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${t.border}` }}>
+                  <tr key={r.id} style={{ borderTop: `1px solid ${t.border}`, background: r.result.tone === "bad" ? t.badSoft : "transparent" }}>
                     <td style={{ padding: "10px 14px", color: t.ink3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{idx + 1}</td>
                     <td style={{ padding: "10px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.code}</td>
                     <td style={{ padding: "10px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.period}</td>
@@ -778,7 +1314,7 @@ function CheckPage() {
                     <td style={{ padding: "10px 14px" }}>
                       {r.result.status ? (
                         <div>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: t[r.result.tone + "Soft"], color: t[r.result.tone], borderRadius: 99, padding: "3px 10px", fontSize: 12, fontWeight: 600 }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: t[r.result.tone + "Soft"], color: t[r.result.tone], border: `1px solid ${t[r.result.tone]}33`, borderRadius: 99, padding: "3px 10px", fontSize: 12, fontWeight: 600 }}>
                             <span style={{ fontSize: 8 }}>{TONE_DOT[r.result.tone]}</span>{r.result.status}
                           </span>
                           {r.result.note && <div style={{ fontSize: 11.5, color: t.ink3, marginTop: 4 }}>{r.result.note}</div>}
@@ -796,6 +1332,18 @@ function CheckPage() {
         </div>
 
         <div style={{ marginTop: 18, fontSize: 11.5, color: t.ink3 }}>เชื่อมต่อฐานข้อมูลจริงแล้ว — ยังไม่มีปุ่มบันทึกถาวร (ตรวจสอบสถานะได้แต่ยังไม่เขียนข้อมูลใหม่ลง Supabase) จะเพิ่มในขั้นถัดไป</div>
+        </>
+        )}
+
+        {active === "dashboard" && <DashboardPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
+        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
+        {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
+        {active === "fix" && <FixPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
+        {active === "admin" && (
+          profile.is_admin
+            ? <AdminPage t={t} token={session.access_token} />
+            : <div style={{ color: t.ink3, fontSize: 13.5 }}>หน้านี้สำหรับแอดมินเท่านั้น</div>
+        )}
       </main>
 
       <style>{`
