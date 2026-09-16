@@ -442,177 +442,184 @@ function sumMoney(computed) {
   return { installTotal, feeTotal, cumTotal, slipTotal, pendingTotal, dailyTotal: installTotal + feeTotal + cumTotal };
 }
 
-function TodaySummary({ t, computed }) {
-  const withStatus = computed.filter((r) => r.result.status);
-  const okRows = withStatus.filter((r) => r.result.tone === "ok" || r.result.status === "รอครบงวด" || r.result.status.includes("เพิ่มเติม"));
-  const issueRows = withStatus.filter((r) => r.result.tone === "bad" || r.result.tone === "warn");
+// รายชื่อสถานะคงที่สำหรับโชว์ pill ครบทุกอัน (แม้ค่าเป็น 0) เหมือนระบบเดิม — ต่างจากเดิมแค่คำที่ใช้
+// ในบางสถานะ เพราะระบบใหม่ไม่มี "ลูกค้าใหม่"/"ยืนยันแล้ว" แยกต่างหากแล้ว (สถานะสัญญาเป็นฟิลด์ตรงๆ)
+const OK_STATUS_LIST = ["ถูก", "รอครบงวด", "ค่าธรรมเนียมเพิ่มเติม", "สะสมเพิ่มเติม", "ค่าธรรมเนียม+สะสมเพิ่มเติม"];
+const ISSUE_STATUS_LIST = ["ซ้ำ", "ซ้ำในรายการตรวจ", "ข้ามงวด", "จำนวนเงินไม่ตรง", "ยอดเกิน", "รูปแบบงวดไม่ถูกต้อง", "ไม่พบข้อมูลลูกค้า", "งวดนี้จ่ายครบไปแล้ว", "เกินจำนวนงวดสัญญา"];
+function isIssueStatus(status) {
+  return ISSUE_STATUS_LIST.includes(status) || status.startsWith("สัญญานี้ปิดแล้ว");
+}
 
-  const countBy = (list) => {
-    const c = {};
-    list.forEach((r) => { c[r.result.status] = (c[r.result.status] || 0) + 1; });
-    return c;
-  };
-  const okCounts = countBy(okRows), issueCounts = countBy(issueRows);
-  const { installTotal, feeTotal, cumTotal, slipTotal, pendingTotal, dailyTotal } = sumMoney(computed);
-  const slipDiff = slipTotal - dailyTotal;
-  const slipMatch = slipDiff === 0 && withStatus.length > 0;
-
-  const pill = (statusName, count, isOk) => (
-    <div key={statusName} style={{ display: "flex", alignItems: "center", gap: 8, background: count === 0 ? t.surfaceAlt : (isOk ? t.okSoft : t.badSoft), color: count === 0 ? t.ink3 : (isOk ? t.ok : t.bad), borderRadius: 10, padding: "8px 12px", fontSize: 12.5 }}>
-      <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 15 }}>{count}</span>
-      <span>{statusName}</span>
+function StatusPillRow({ t, list, counts, isOk }) {
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {list.map((s) => {
+        const c = counts[s] || 0;
+        return (
+          <div key={s} style={{ display: "flex", alignItems: "center", gap: 8, background: c === 0 ? t.surfaceAlt : (isOk ? t.okSoft : t.badSoft), color: c === 0 ? t.ink3 : (isOk ? t.ok : t.bad), borderRadius: 10, padding: "8px 12px", fontSize: 12.5 }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 15 }}>{c}</span>
+            <span>{s}</span>
+          </div>
+        );
+      })}
     </div>
   );
+}
+function MoneyChips({ t, totals }) {
   const chip = (lbl, val) => (
     <div style={{ background: t.surfaceAlt, borderRadius: 10, padding: "10px 14px", flex: 1, minWidth: 120 }}>
       <div style={{ fontSize: 11.5, color: t.ink2, marginBottom: 4 }}>{lbl}</div>
       <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 15 }}>{fmt(val)}</div>
     </div>
   );
+  return (
+    <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+      {chip("ค่างวดรวม", totals.installTotal)}
+      {chip("ค่าธรรมเนียมรวม", totals.feeTotal)}
+      {chip("สะสมรวม", totals.cumTotal)}
+      {chip("ยอดรอครบงวด", totals.pendingTotal)}
+    </div>
+  );
+}
+function SlipBanner({ t, totals }) {
+  const slipDiff = totals.slipTotal - totals.dailyTotal;
+  const slipMatch = slipDiff === 0;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: slipMatch ? t.okSoft : t.badSoft }}>
+      <div style={{ width: 30, height: 30, borderRadius: 99, background: slipMatch ? t.ok : t.bad, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, flexShrink: 0 }}>{slipMatch ? "✓" : "!"}</div>
+      <div>
+        <div style={{ fontWeight: 600, fontSize: 13, color: slipMatch ? t.ok : t.bad }}>{slipMatch ? "ยอดสลิปตรงกับยอดรวมประจำวัน" : "ยอดสลิปไม่ตรงกับยอดรวมประจำวัน"}</div>
+        <div style={{ fontSize: 12, color: t.ink2 }}>{slipMatch ? "ไม่พบผลต่าง สามารถปิดยอดวันนี้ได้" : `ผลต่าง ${fmt(Math.abs(slipDiff))} บาท — ตรวจสอบรายการยอดตามสลิปอีกครั้ง`}</div>
+      </div>
+    </div>
+  );
+}
+
+function TodaySummary({ t, computed }) {
+  const withStatus = computed.filter((r) => r.result.status);
+  const okRows = withStatus.filter((r) => !isIssueStatus(r.result.status));
+  const issueRows = withStatus.filter((r) => isIssueStatus(r.result.status));
+  const countBy = (list) => { const c = {}; list.forEach((r) => { c[r.result.status] = (c[r.result.status] || 0) + 1; }); return c; };
+  const totals = sumMoney(computed);
 
   return (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>วันนี้ — สรุปรายการที่กำลังตรวจอยู่</div>
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 14 }}>
-        <Card t={t} style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 28, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace", color: t.ok }}>{okRows.length}</span>
-            <span style={{ fontSize: 12.5, color: t.ink2 }}>รายการถูกต้องวันนี้</span>
-            {issueRows.length > 0 && <>
-              <span style={{ fontSize: 28, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace", color: t.bad, marginLeft: 10 }}>{issueRows.length}</span>
-              <span style={{ fontSize: 12.5, color: t.ink2 }}>ต้องตรวจสอบซ้ำ</span>
-            </>}
-          </div>
-        </Card>
-        <Card t={t} style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{fmt(dailyTotal)} <span style={{ fontSize: 12.5, fontWeight: 400, color: t.ink2 }}>บาท — ยอดรวมประจำวัน</span></div>
-        </Card>
-      </div>
-      {withStatus.length > 0 && (
-        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 14 }}>
-          <div style={{ flex: 1, minWidth: 260 }}>
-            <div style={{ fontSize: 12, color: t.ink2, marginBottom: 8, fontWeight: 500 }}>ผลถูกต้อง</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{Object.entries(okCounts).map(([s, c]) => pill(s, c, true))}</div>
-          </div>
-          <div style={{ flex: 1, minWidth: 260 }}>
-            <div style={{ fontSize: 12, color: t.ink2, marginBottom: 8, fontWeight: 500 }}>ต้องตรวจสอบ</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {Object.keys(issueCounts).length === 0 ? <span style={{ fontSize: 12.5, color: t.ink3 }}>ไม่มี</span> : Object.entries(issueCounts).map(([s, c]) => pill(s, c, false))}
-            </div>
-          </div>
+    <div>
+      <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>ผลการตรวจสอบวันนี้</div>
+      <Card t={t} style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 16 }}>
+          <span style={{ fontSize: 28, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{okRows.length}</span>
+          <span style={{ fontSize: 13, color: t.ink2 }}>รายการถูกต้องวันนี้</span>
         </div>
-      )}
+        <div style={{ fontSize: 12, color: t.ink2, marginBottom: 8, fontWeight: 500 }}>ผลถูกต้อง</div>
+        <StatusPillRow t={t} list={OK_STATUS_LIST} counts={countBy(okRows)} isOk={true} />
+        <div style={{ fontSize: 12, color: t.ink2, margin: "16px 0 8px", fontWeight: 500 }}>ต้องตรวจสอบ</div>
+        <StatusPillRow t={t} list={ISSUE_STATUS_LIST} counts={countBy(issueRows)} isOk={false} />
+      </Card>
+
+      <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>สรุปยอดเงิน</div>
+      <Card t={t} style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace", marginBottom: 14 }}>{fmt(totals.dailyTotal)} <span style={{ fontSize: 12.5, fontWeight: 400, color: t.ink2 }}>บาท — ยอดรวมประจำวัน</span></div>
+        <MoneyChips t={t} totals={totals} />
+      </Card>
+
+      <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>ตรวจสอบยอดสลิปธนาคาร</div>
       <Card t={t}>
-        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-          {chip("ค่างวดรวม", installTotal)}
-          {chip("ค่าธรรมเนียมรวม", feeTotal)}
-          {chip("สะสมรวม", cumTotal)}
-          {chip("ยอดรอครบงวด", pendingTotal)}
-        </div>
-        {withStatus.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10, background: slipMatch ? t.okSoft : t.badSoft }}>
-            <div style={{ width: 30, height: 30, borderRadius: 99, background: slipMatch ? t.ok : t.bad, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, flexShrink: 0 }}>{slipMatch ? "✓" : "!"}</div>
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 13, color: slipMatch ? t.ok : t.bad }}>{slipMatch ? "ยอดสลิปตรงกับยอดรวมประจำวัน" : "ยอดสลิปไม่ตรงกับยอดรวมประจำวัน"}</div>
-              <div style={{ fontSize: 12, color: t.ink2 }}>{slipMatch ? "ไม่พบผลต่าง สามารถปิดยอดวันนี้ได้" : `ผลต่าง ${fmt(Math.abs(slipDiff))} บาท — ตรวจสอบรายการยอดตามสลิปอีกครั้ง`}</div>
+        <SlipBanner t={t} totals={totals} />
+        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+          {[["ยอดตามสลิป", totals.slipTotal], ["ยอดรวมประจำวัน", totals.dailyTotal], ["ผลต่าง", totals.slipTotal - totals.dailyTotal]].map(([l, v]) => (
+            <div key={l} style={{ background: t.surfaceAlt, borderRadius: 10, padding: "10px 14px", flex: 1, minWidth: 120 }}>
+              <div style={{ fontSize: 11.5, color: t.ink2, marginBottom: 4 }}>{l}</div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 700, fontSize: 15 }}>{fmt(v)}</div>
             </div>
-          </div>
-        )}
+          ))}
+        </div>
+        <div style={{ fontSize: 11.5, color: t.ink3, marginTop: 10 }}>รวมยอดตามสลิปเฉพาะรายการที่ผลตรวจถูกต้อง (ถูก / รอครบงวด) แล้วเทียบกับยอดรวมประจำวันที่ระบบคำนวณได้</div>
       </Card>
     </div>
   );
 }
 
-function DashboardPage({ t, token, branchId, computed }) {
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [search, setSearch] = useState("");
-  const [searchResult, setSearchResult] = useState(null);
-  const [searching, setSearching] = useState(false);
+// สรุปยอดตามช่วงลำดับที่ตรวจ — ทำงานได้จริงเพราะคำนวณจากรายการที่กำลังตรวจอยู่ตอนนี้โดยตรง ไม่ต้อง
+// พึ่งการบันทึกถาวรเลย (ต่างจาก "รายงานสรุปตามช่วงวันที่" ด้านล่างที่ต้องรอฟีเจอร์บันทึกก่อน)
+function SequenceRangeSummary({ t, computed }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [result, setResult] = useState(null);
+  const input = mkInput(t);
 
-  useEffect(() => {
-    if (!token || !branchId) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true); setErr("");
-      try {
-        const [active, closed, returned] = await Promise.all([
-          supabaseRest(`contracts?branch_id=eq.${branchId}&status=eq.active&select=contract_id`, { token }),
-          supabaseRest(`contracts?branch_id=eq.${branchId}&status=eq.closed&select=contract_id`, { token }),
-          supabaseRest(`contracts?branch_id=eq.${branchId}&status=eq.returned&select=contract_id`, { token }),
-        ]);
-        if (cancelled) return;
-        setStats({ active: active.length, closed: closed.length, returned: returned.length });
-      } catch (e) { if (!cancelled) setErr(e.message); }
-      finally { if (!cancelled) setLoading(false); }
-    })();
-    return () => { cancelled = true; };
-  }, [token, branchId]);
-
-  async function doSearch(e) {
-    e.preventDefault();
-    if (!search.trim()) return;
-    setSearching(true); setSearchResult(null); setErr("");
-    try {
-      const contracts = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(search.trim())}&branch_id=eq.${branchId}&select=*&order=start_date.desc`, { token });
-      setSearchResult(contracts);
-    } catch (e2) { setErr(e2.message); }
-    finally { setSearching(false); }
+  function run() {
+    const start = from.trim() ? Math.max(1, parseInt(from, 10)) : 1;
+    const end = to.trim() ? Math.min(computed.length, parseInt(to, 10)) : computed.length;
+    const subset = computed.slice(start - 1, end);
+    setResult({ start, end, totals: sumMoney(subset), count: subset.filter((r) => r.result.status).length });
   }
 
-  const input = mkInput(t), label = mkLabel(t);
-  const statCard = (icon, lbl, value, tone) => (
-    <Card t={t} style={{ flex: 1, minWidth: 140 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <span style={{ fontSize: 12, color: t.ink2, fontWeight: 500 }}>{lbl}</span>
-        <div style={{ width: 26, height: 26, borderRadius: 8, background: t[tone + "Soft"], display: "flex", alignItems: "center", justifyContent: "center" }}>{icon}</div>
-      </div>
-      <div style={{ fontSize: 24, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{value}</div>
-    </Card>
-  );
-
   return (
-    <div>
-      <PageHeader t={t} title="Dashboard" sub="ภาพรวมสัญญาของสาขาที่เลือกไว้" />
-      <ErrBox t={t} msg={err} />
-
-      <TodaySummary t={t} computed={computed} />
-
-      <div style={{ background: t.infoSoft, color: t.info, borderRadius: 10, padding: "10px 14px", fontSize: 12, lineHeight: 1.6, marginBottom: 20 }}>
-        แท็บ "รายงานย้อนหลัง" ของระบบเดิมยังทำไม่ได้ตอนนี้ เพราะต้องมีปุ่ม "บันทึก" ก่อนถึงจะมีอะไรให้ดูย้อนหลัง — ส่วนแท็บ "พื้นที่&ย้ายลูกค้าจบ" ไม่จำเป็นต้องมีอีกแล้ว เพราะเป็นวิธีแก้ปัญหา Google Sheets ทำงานช้าเมื่อข้อมูลเยอะ ซึ่ง Supabase ไม่มีข้อจำกัดนี้
+    <Card t={t} style={{ marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>สรุปยอดตามช่วงลำดับที่ตรวจ</div>
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 14, lineHeight: 1.6 }}>เว้นว่างช่องใดช่องหนึ่งหรือทั้งคู่ = รวมทั้งหมด (ดูเลขลำดับได้จากคอลัมน์ # ในตาราง "รายการวันนี้" ที่หน้าตรวจสอบ)</div>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <div>
+          <label style={mkLabel(t)}>จากลำดับที่</label>
+          <input style={{ ...input, width: 140 }} placeholder="ไม่ระบุ = แถวแรก" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </div>
+        <div>
+          <label style={mkLabel(t)}>ถึงลำดับที่</label>
+          <input style={{ ...input, width: 140 }} placeholder="ไม่ระบุ = แถวสุดท้าย" value={to} onChange={(e) => setTo(e.target.value)} />
+        </div>
+        <button onClick={run} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>สรุปช่วงนี้</button>
       </div>
-
-      <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>ภาพรวมสัญญาทั้งหมดในสาขา</div>
-      {loading ? <Loading t={t} /> : stats && (
-        <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-          {statCard(<ClipboardCheck size={13} color={t.ok} />, "ผ่อนอยู่ (active)", stats.active, "ok")}
-          {statCard(<Archive size={13} color={t.neutral} />, "ผ่อนจบ (closed)", stats.closed, "neutral")}
-          {statCard(<AlertTriangle size={13} color={t.warn} />, "คืน/ยึดเครื่อง", stats.returned, "warn")}
-          {statCard(<Database size={13} color={t.accent} />, "รวมทั้งหมด", stats.active + stats.closed + stats.returned, "accent")}
+      {result && (
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${t.border}` }}>
+          <div style={{ fontSize: 12.5, color: t.ink2, marginBottom: 10 }}>ลำดับที่ {result.start}–{result.end} ({result.count} รายการที่มีผลตรวจ)</div>
+          <MoneyChips t={t} totals={result.totals} />
+          <div style={{ fontSize: 15, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{fmt(result.totals.dailyTotal)} <span style={{ fontSize: 12, fontWeight: 400, color: t.ink2 }}>บาท — ยอดรวมช่วงนี้</span></div>
         </div>
       )}
-      <Card t={t}>
-        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 12 }}>ค้นหาสัญญาด้วยรหัสลูกค้า</div>
-        <form onSubmit={doSearch} style={{ display: "flex", gap: 10, marginBottom: searchResult ? 16 : 0 }}>
-          <input style={input} placeholder="เช่น 9" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <button type="submit" disabled={searching} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>ค้นหา</button>
-        </form>
-        {searchResult && (
-          searchResult.length === 0 ? <div style={{ color: t.ink3, fontSize: 13 }}>ไม่พบรหัสนี้ในสาขาที่เลือก</div> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {searchResult.map((c) => (
-                <div key={c.contract_id} style={{ border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600 }}>#{c.contract_id}</span>
-                  <span style={{ fontSize: 12.5, color: t.ink2 }}>เริ่ม {c.start_date}</span>
-                  <span style={{ fontSize: 12.5, color: t.ink2 }}>{c.total_installments} งวด × {Number(c.amount_per_installment).toLocaleString()} บาท</span>
-                  <span style={{ marginLeft: "auto", background: t[(c.status === "active" ? "ok" : c.status === "closed" ? "neutral" : "warn") + "Soft"], color: t[c.status === "active" ? "ok" : c.status === "closed" ? "neutral" : "warn"], borderRadius: 99, padding: "3px 10px", fontSize: 11.5, fontWeight: 600 }}>{STATUS_LABEL_TH[c.status]}</span>
-                </div>
-              ))}
-            </div>
-          )
-        )}
-      </Card>
+    </Card>
+  );
+}
+
+// รายงานสรุปตามช่วงวันที่ — ต้องมีปุ่ม "บันทึก" (เขียนข้อมูลลง Supabase จริง) ก่อนถึงจะมีอะไรให้ดูย้อนหลัง
+// ตอนนี้ยังไม่มี เลยใส่หน้าตาไว้ให้เห็นโครงตามระบบเดิม แต่ปิดการใช้งานไว้ก่อนตรงๆ ไม่ทำเป็นปุ่มหลอกๆ
+function DateRangeReport({ t }) {
+  const input = { ...mkInput(t), opacity: 0.5, cursor: "not-allowed" };
+  return (
+    <Card t={t}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>รายงานสรุปตามช่วงวันที่</div>
+      <div style={{ background: t.warnSoft, color: t.warn, borderRadius: 8, padding: "10px 12px", fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>
+        ยังใช้ไม่ได้ตอนนี้ — ต้องมีปุ่ม "บันทึก" ที่เขียนข้อมูลแต่ละวันลงฐานข้อมูลจริงก่อน ถึงจะมีอะไรให้สรุปย้อนหลัง
+      </div>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        <div><label style={mkLabel(t)}>ตั้งแต่วันที่</label><input type="date" disabled style={{ ...input, width: 160 }} /></div>
+        <div><label style={mkLabel(t)}>ถึงวันที่</label><input type="date" disabled style={{ ...input, width: 160 }} /></div>
+      </div>
+      <button disabled style={{ background: t.neutral, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, fontFamily: "inherit", opacity: 0.5, cursor: "not-allowed" }}>สรุปยอด</button>
+    </Card>
+  );
+}
+
+function DashboardPage({ t, computed }) {
+  const [tab, setTab] = useState("today");
+  const tabBtn = (key, label) => (
+    <button onClick={() => setTab(key)} style={{ background: tab === key ? t.surface : "transparent", color: tab === key ? t.ink : t.ink2, border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 13, fontWeight: tab === key ? 600 : 500, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === key ? t.shadow : "none" }}>
+      {label}
+    </button>
+  );
+  return (
+    <div>
+      <PageHeader t={t} title="Dashboard" />
+      <div style={{ display: "inline-flex", gap: 4, background: t.surfaceAlt, borderRadius: 11, padding: 4, marginBottom: 20 }}>
+        {tabBtn("today", "วันนี้")}
+        {tabBtn("history", "รายงานย้อนหลัง")}
+      </div>
+      {tab === "today" && <TodaySummary t={t} computed={computed} />}
+      {tab === "history" && (
+        <div>
+          <SequenceRangeSummary t={t} computed={computed} />
+          <DateRangeReport t={t} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1450,7 +1457,7 @@ function CheckPage() {
         </>
         )}
 
-        {active === "dashboard" && <DashboardPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} computed={computed} />}
+        {active === "dashboard" && <DashboardPage t={t} computed={computed} />}
         {active === "wr" && <WRPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
         {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
         {active === "fix" && <FixPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
