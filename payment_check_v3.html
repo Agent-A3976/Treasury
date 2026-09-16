@@ -15,9 +15,6 @@
 <body>
 <div id="root"></div>
 
-<!-- เก็บซอร์ส JSX ไว้เป็นข้อความธรรมดา (type="text/plain" เบราว์เซอร์จะไม่พยายามรันเอง) แล้วค่อย
-     สั่งแปลงด้วย Babel.transform() ตรงๆ ด้วยมือ ระบุ runtime:"classic" ชัดเจน กัน Babel เวอร์ชันใหม่
-     auto-inject import statement ของ JSX runtime อัตโนมัติ -->
 <script type="text/plain" id="app-source">
 const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
@@ -47,6 +44,8 @@ const ShieldCheck = (p) => <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 
 const Wallet = (p) => <Icon {...p}><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16v-5" /><path d="M18 12a2 2 0 0 0 0 4h4v-4z" /></Icon>;
 const LogOut = (p) => <Icon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></Icon>;
 const Loader2 = (p) => <Icon {...p}><path d="M21 12a9 9 0 1 1-6.2-8.6" /></Icon>;
+const Eye = (p) => <Icon {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></Icon>;
+const EyeOff = (p) => <Icon {...p}><path d="M17.9 17.9A10.4 10.4 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 4.2-5.2M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.6 18.6 0 0 1-2.2 3.2" /><path d="M9.5 9.5a3 3 0 0 0 4.2 4.2" /><line x1="1" y1="1" x2="23" y2="23" /></Icon>;
 
 
 /* ============================================================================
@@ -234,13 +233,15 @@ function useComputedRows(rows, token, branchId) {
 // ---------------------------------------------------------------------------
 function usernameToInternalEmail(username) {
   const safe = String(username).trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
-  return `${safe || "user"}@staff.internal`;
+  return `${safe || "user"}@treasury-staff.com`;
 }
 
 function LoginScreen({ t, mode, setMode, onAuthed }) {
   const [isSignup, setIsSignup] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [signupDone, setSignupDone] = useState(false);
@@ -303,8 +304,23 @@ function LoginScreen({ t, mode, setMode, onAuthed }) {
               </div>
               <div style={{ marginBottom: 8 }}>
                 <label style={{ fontSize: 12, color: t.ink2, marginBottom: 5, display: "block", fontWeight: 500 }}>รหัสผ่าน</label>
-                <input style={input} type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="อย่างน้อย 6 ตัวอักษร" />
+                <div style={{ position: "relative" }}>
+                  <input style={{ ...input, paddingRight: 40 }} type={showPassword ? "text" : "password"} required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="อย่างน้อย 6 ตัวอักษร" />
+                  <button type="button" onClick={() => setShowPassword((s) => !s)} aria-label={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"} style={{ position: "absolute", right: 4, top: 4, width: 30, height: 30, background: "none", border: "none", cursor: "pointer", color: t.ink3, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
               </div>
+              {!isSignup && (
+                <button type="button" onClick={() => setShowForgot((s) => !s)} style={{ background: "none", border: "none", color: t.ink3, fontSize: 12, cursor: "pointer", fontFamily: "inherit", padding: 0, marginBottom: 8 }}>
+                  ลืมรหัสผ่าน?
+                </button>
+              )}
+              {showForgot && !isSignup && (
+                <div style={{ background: t.warnSoft, color: t.warn, borderRadius: 8, padding: "10px 12px", fontSize: 12, lineHeight: 1.6, marginBottom: 12 }}>
+                  ระบบนี้ใช้รหัสผู้ใช้ภายในองค์กร ไม่มีอีเมลจริงให้ส่งลิงก์รีเซ็ต — กรุณาติดต่อแอดมินของสาขาให้ช่วยตั้งรหัสผ่านใหม่ให้โดยตรง
+                </div>
+              )}
               {err && <div style={{ color: t.bad, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
               <button type="submit" disabled={busy} style={{ width: "100%", marginTop: 16, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13.5, fontWeight: 600, cursor: busy ? "default" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: busy ? 0.7 : 1 }}>
                 {busy && <Loader2 size={14} className="spin" />}
