@@ -628,7 +628,223 @@ function DashboardPage({ t, computed }) {
 /* ============================================================================
  * Working Reference — ประวัติการจ่ายเงินล่าสุด ค้นหาตามรหัสลูกค้า หรือดูตามวันที่
  * ==========================================================================*/
-function WRPage({ t, token, branchId }) {
+const THAI_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+
+// แกะบรรทัดที่วาง (รหัส,งวด,ยอด,วัน,เดือน,ปี) แบบยืดหยุ่นเหมือนระบบเดิมทุกอย่าง — ลองคั่นด้วย Tab
+// ก่อน (ปกติก็อปจาก Excel) ไม่ครบค่อยลองคอมมา ไม่ครบอีกค่อยลองช่องว่าง เดือนรับได้ทั้งชื่อไทย/เลข
+// 1-12 ปีรับได้ทั้ง พ.ศ./ค.ศ. (เดา: ถ้าน้อยกว่า 2400 ถือว่าเป็น ค.ศ. แล้วบวก 543 ให้เอง)
+function parseImportLine(line) {
+  let parts = line.split("\t");
+  if (parts.length < 6) parts = line.split(",");
+  if (parts.length < 6) parts = line.trim().split(/\s+/);
+  parts = parts.map((s) => s.trim());
+  if (parts.length < 6) return null;
+  const [code, period, amountStr, dayStr, monthStr, yearStr] = parts;
+  const amount = parseFloat(String(amountStr).replace(/,/g, ""));
+  const day = parseInt(dayStr, 10);
+  let monthName = monthStr;
+  if (/^\d+$/.test(monthStr)) {
+    const mi = parseInt(monthStr, 10);
+    if (mi >= 1 && mi <= 12) monthName = THAI_MONTHS[mi - 1];
+  }
+  let yearBE = parseInt(yearStr, 10);
+  if (!isNaN(yearBE) && yearBE < 2400) yearBE += 543;
+  const monthIdx = THAI_MONTHS.indexOf(monthName);
+  if (!code || !period || isNaN(amount) || isNaN(day) || monthIdx === -1 || isNaN(yearBE)) return null;
+  return { code, period, amount, day, monthIdx, yearBE };
+}
+function toISODate(day, monthIdx, yearBE) {
+  return `${yearBE - 543}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+// สร้าง+บันทึกแถว payment จริง 1 แถว — หา contract_id จากรหัสลูกค้าก่อนเสมอ (ใช้ cache ต่อ session
+// เดียวกับหน้าตรวจสอบ ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว) เช็คซ้ำก่อน insert ทุกครั้งกันกดซ้ำโดยไม่ตั้งใจ
+async function postPaymentRow(token, branchId, code, period, amount, isoDate, contractCache) {
+  const p = parsePeriod(period);
+  if (!p || !p.fmtOK) return { ok: false, msg: `งวดที่ "${period}" รูปแบบไม่ถูกต้อง` };
+  let contract = contractCache.get(code);
+  if (contract === undefined) {
+    contract = await fetchContractForCode(token, branchId, code);
+    contractCache.set(code, contract);
+  }
+  if (!contract) return { ok: false, msg: `ไม่พบรหัสลูกค้า "${code}" ในสาขานี้` };
+  const installment_number = p.hasDash ? p.end : p.start;
+  const payment_type = p.status || null;
+  const dup = await supabaseRest(
+    `payments?contract_id=eq.${contract.contract_id}&installment_number=eq.${installment_number}&amount=eq.${amount}&payment_date=eq.${isoDate}&select=payment_id&limit=1`,
+    { token }
+  );
+  if (dup.length) return { ok: false, msg: `ซ้ำ — มีแถวนี้อยู่ในฐานข้อมูลแล้ว (contract_id ${contract.contract_id})` };
+  await supabaseRest("payments", { method: "POST", token, body: { contract_id: contract.contract_id, installment_number, payment_type, amount, payment_date: isoDate } });
+  return { ok: true, msg: `บันทึกแล้ว (contract_id ${contract.contract_id} งวด ${installment_number})` };
+}
+
+function ImportPasteCard({ t, token, branchId }) {
+  const [text, setText] = useState("");
+  const [results, setResults] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const input = mkInput(t);
+
+  async function doImport() {
+    setBusy(true); setResults(null);
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const out = [];
+    const cache = new Map();
+    for (let i = 0; i < lines.length; i++) {
+      const parsed = parseImportLine(lines[i]);
+      if (!parsed) { out.push({ line: i + 1, ok: false, msg: "จำนวนคอลัมน์ไม่ครบ 6 ช่อง หรือรูปแบบไม่ถูกต้อง" }); continue; }
+      try {
+        const r = await postPaymentRow(token, branchId, parsed.code, parsed.period, parsed.amount, toISODate(parsed.day, parsed.monthIdx, parsed.yearBE), cache);
+        out.push({ line: i + 1, ...r });
+      } catch (e) { out.push({ line: i + 1, ok: false, msg: e.message }); }
+    }
+    setResults(out);
+    setBusy(false);
+    if (out.length && out.every((r) => r.ok)) setText("");
+  }
+
+  return (
+    <Card t={t} style={{ marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>เพิ่มข้อมูลเอง (วางจาก Excel)</div>
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 12, lineHeight: 1.6 }}>แต่ละแถว: รหัสลูกค้า, งวดที่, จำนวนเงิน, วันที่, เดือน, พ.ศ. — คั่นด้วย Tab (ก็อปจาก Excel วางได้เลย) หนึ่งบรรทัดต่อหนึ่งแถว</div>
+      <textarea style={{ ...input, height: 130, resize: "vertical", fontFamily: "'IBM Plex Mono', monospace" }} value={text} onChange={(e) => setText(e.target.value)} placeholder={"9\t7\t2700\t20\tกรกฎาคม\t2568"} />
+      <button onClick={doImport} disabled={busy || !text.trim()} style={{ marginTop: 12, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: busy ? "default" : "pointer", fontFamily: "inherit", opacity: busy || !text.trim() ? 0.6 : 1 }}>
+        {busy ? "กำลังนำเข้า..." : "นำเข้าข้อมูล"}
+      </button>
+      {results && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: results.every((r) => r.ok) ? t.ok : t.bad, marginBottom: 8 }}>
+            สำเร็จ {results.filter((r) => r.ok).length} / ล้มเหลว {results.filter((r) => !r.ok).length} จากทั้งหมด {results.length} แถว
+          </div>
+          <div style={{ maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+            {results.map((r, i) => (<div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>บรรทัด {r.line}: {r.msg}</div>))}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// เทียบข้อมูลที่วางมากับ "รายการวันนี้" ในหน้าตรวจสอบก่อนเสมอ — ต้องตรงกันครบทุกแถวถึงจะบันทึกได้
+// (กันบันทึกข้อมูลที่ไม่ตรงกับสิ่งที่ตรวจสอบไว้บนหน้าจอจริง) ย้ายมาจากระบบเดิมทั้ง logic
+function BackfillCompareCard({ t, token, branchId, computed }) {
+  const [text, setText] = useState("");
+  const now = new Date();
+  const [day, setDay] = useState(now.getDate());
+  const [monthIdx, setMonthIdx] = useState(now.getMonth());
+  const [yearBE, setYearBE] = useState(now.getFullYear() + 543);
+  const [compareResult, setCompareResult] = useState(null);
+  const [committing, setCommitting] = useState(false);
+  const [commitResult, setCommitResult] = useState(null);
+  const input = mkInput(t);
+
+  function doCompare() {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const pasted = lines.map((line) => {
+      let parts = line.split("\t");
+      if (parts.length < 3) parts = line.split(",");
+      if (parts.length < 3) parts = line.trim().split(/\s+/);
+      parts = parts.map((s) => s.trim());
+      return { code: parts[0] || "", period: parts[1] || "", amount: parts[2] || "" };
+    }).filter((r) => r.code || r.period || r.amount);
+
+    const todayPool = computed.filter((r) => r.result.status).map((r) => ({ code: r.code.trim(), period: r.period.trim(), amount: parseFloat(r.amount) || 0, used: false }));
+    const matched = [], mismatched = [];
+    pasted.forEach((row) => {
+      const amt = parseFloat(row.amount) || 0;
+      let hit = todayPool.find((w) => !w.used && w.code === row.code && w.period === row.period && w.amount === amt);
+      if (hit) { hit.used = true; matched.push(row); return; }
+      let sameCodePeriod = todayPool.find((w) => !w.used && w.code === row.code && w.period === row.period);
+      if (sameCodePeriod) { mismatched.push({ row, reason: `จำนวนเงินไม่ตรง: ในรายการวันนี้มี ${fmt(sameCodePeriod.amount)} บาท แต่วางมา ${fmt(amt)} บาท` }); return; }
+      let sameCode = todayPool.find((w) => !w.used && w.code === row.code);
+      if (sameCode) { mismatched.push({ row, reason: `งวดไม่ตรง: ในรายการวันนี้มีงวด "${sameCode.period}" แต่วางมางวด "${row.period}"` }); return; }
+      mismatched.push({ row, reason: "ไม่พบรหัสลูกค้านี้ในรายการวันนี้เลย" });
+    });
+    todayPool.filter((w) => !w.used).forEach((w) => {
+      mismatched.push({ row: { code: w.code, period: w.period, amount: String(w.amount) }, reason: "มีอยู่ในรายการวันนี้ แต่ไม่พบในข้อมูลที่วางมาเทียบเลย" });
+    });
+    setCompareResult({ matched, mismatched, pastedCount: pasted.length });
+    setCommitResult(null);
+  }
+
+  async function doCommit() {
+    setCommitting(true);
+    const isoDate = toISODate(day, monthIdx, yearBE);
+    const cache = new Map();
+    const out = [];
+    for (const row of compareResult.matched) {
+      try {
+        const r = await postPaymentRow(token, branchId, row.code, row.period, parseFloat(row.amount) || 0, isoDate, cache);
+        out.push({ ...row, ...r });
+      } catch (e) { out.push({ ...row, ok: false, msg: e.message }); }
+    }
+    setCommitResult(out);
+    setCommitting(false);
+  }
+
+  const allGood = compareResult && compareResult.mismatched.length === 0 && compareResult.matched.length > 0;
+  const selectStyle = { ...input, cursor: "pointer" };
+
+  return (
+    <Card t={t}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>เทียบ/เพิ่มข้อมูลย้อนหลังเข้า Working Reference</div>
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 12, lineHeight: 1.6 }}>วางข้อมูล (รหัสลูกค้า, งวดที่, จำนวนเงิน) ระบบจะเทียบกับ "รายการวันนี้" ในหน้าตรวจสอบ ว่าตรงกันไหม ขาดอะไร หรือมีอะไรผิดเพี้ยน — ถ้าตรงกันครบทุกแถว จะมีปุ่มให้บันทึกลง Working Reference โดยใช้วันที่เลือกด้านล่างนี้</div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+        <div><label style={mkLabel(t)}>วัน (ใช้ตอนบันทึกจริง)</label>
+          <select value={day} onChange={(e) => setDay(Number(e.target.value))} style={{ ...selectStyle, width: 90 }}>
+            {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        <div><label style={mkLabel(t)}>เดือน (ใช้ตอนบันทึกจริง)</label>
+          <select value={monthIdx} onChange={(e) => setMonthIdx(Number(e.target.value))} style={{ ...selectStyle, width: 140 }}>
+            {THAI_MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+        </div>
+        <div><label style={mkLabel(t)}>พ.ศ. (ใช้ตอนบันทึกจริง)</label>
+          <select value={yearBE} onChange={(e) => setYearBE(Number(e.target.value))} style={{ ...selectStyle, width: 100 }}>
+            {Array.from({ length: 5 }, (_, i) => now.getFullYear() + 543 - 2 + i).map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      </div>
+      <textarea style={{ ...input, height: 110, resize: "vertical", fontFamily: "'IBM Plex Mono', monospace" }} value={text} onChange={(e) => setText(e.target.value)} placeholder={"9\t7\t2700"} />
+      <button onClick={doCompare} disabled={!text.trim()} style={{ marginTop: 12, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>เทียบข้อมูล</button>
+
+      {compareResult && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ background: allGood ? t.okSoft : t.badSoft, color: allGood ? t.ok : t.bad, borderRadius: 8, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 12 }}>
+            {compareResult.mismatched.length === 0 ? "ตรงกันทั้งหมด" : `ตรงกัน ${compareResult.matched.length} จาก ${compareResult.pastedCount} รายการที่วางมา`}
+          </div>
+          {compareResult.mismatched.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: t.bad, marginBottom: 6 }}>ขาดหาย/ผิดเพี้ยน ({compareResult.mismatched.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 200, overflowY: "auto" }}>
+                {compareResult.mismatched.map((m, i) => (
+                  <div key={i} style={{ fontSize: 12, background: t.badSoft, color: t.bad, borderRadius: 6, padding: "6px 10px" }}>{m.row.code} / {m.row.period} / {m.row.amount} — {m.reason}</div>
+                ))}
+              </div>
+            </div>
+          )}
+          {allGood && !commitResult && (
+            <button onClick={doCommit} disabled={committing} style={{ background: t.ok, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: committing ? "default" : "pointer", fontFamily: "inherit", opacity: committing ? 0.6 : 1 }}>
+              {committing ? "กำลังบันทึก..." : `บันทึกลง Working Reference (${compareResult.matched.length} แถว)`}
+            </button>
+          )}
+          {commitResult && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: commitResult.every((r) => r.ok) ? t.ok : t.bad, marginBottom: 6 }}>
+                บันทึกสำเร็จ {commitResult.filter((r) => r.ok).length} / ล้มเหลว {commitResult.filter((r) => !r.ok).length}
+              </div>
+              {commitResult.map((r, i) => (<div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>{r.code} / {r.period}: {r.msg}</div>))}
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function WRPage({ t, token, branchId, computed }) {
+  const [tab, setTab] = useState("search");
   const [mode, setMode] = useState("date"); // 'date' หรือ 'code'
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [code, setCode] = useState("");
@@ -658,54 +874,76 @@ function WRPage({ t, token, branchId }) {
     finally { setLoading(false); }
   }
 
-  useEffect(() => { if (token && mode === "date") runDateSearch(); }, [token, date, mode]);
+  useEffect(() => { if (token && tab === "search" && mode === "date") runDateSearch(); }, [token, date, mode, tab]);
 
   const input = mkInput(t), label = mkLabel(t);
+  const tabBtn = (key, lbl) => (
+    <button onClick={() => setTab(key)} style={{ background: tab === key ? t.surface : "transparent", color: tab === key ? t.ink : t.ink2, border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 13, fontWeight: tab === key ? 600 : 500, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === key ? t.shadow : "none" }}>
+      {lbl}
+    </button>
+  );
+
   return (
     <div>
       <PageHeader t={t} title="Working Reference" sub="ประวัติการรับชำระเงินที่บันทึกไว้จริงในฐานข้อมูล" />
-      <Card t={t} style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <button onClick={() => setMode("date")} style={{ background: mode === "date" ? t.accent : "transparent", color: mode === "date" ? t.accentInk : t.ink, border: `1px solid ${mode === "date" ? t.accent : t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>ดูตามวันที่</button>
-          <button onClick={() => setMode("code")} style={{ background: mode === "code" ? t.accent : "transparent", color: mode === "code" ? t.accentInk : t.ink, border: `1px solid ${mode === "code" ? t.accent : t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>ค้นหาตามรหัสลูกค้า</button>
-        </div>
-        {mode === "date" ? (
-          <div style={{ maxWidth: 200 }}>
-            <label style={label}>วันที่</label>
-            <input type="date" style={input} value={date} onChange={(e) => setDate(e.target.value)} />
-          </div>
-        ) : (
-          <form onSubmit={runCodeSearch} style={{ display: "flex", gap: 10 }}>
-            <input style={input} placeholder="รหัสลูกค้า เช่น 9" value={code} onChange={(e) => setCode(e.target.value)} />
-            <button type="submit" style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>ค้นหา</button>
-          </form>
-        )}
-      </Card>
-      <ErrBox t={t} msg={err} />
-      <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
-        {loading ? <Loading t={t} /> : rows.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-            <thead><tr style={{ background: t.surfaceAlt }}>
-              {["contract_id", "งวดที่", "ประเภท", "จำนวนเงิน", "วันที่จ่าย"].map((h, i) => (
-                <th key={i} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
-              ))}
-            </tr></thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.payment_id} style={{ borderTop: `1px solid ${t.border}` }}>
-                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.contract_id}</td>
-                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.installment_number}</td>
-                  <td style={{ padding: "9px 14px" }}>{r.payment_type || "—"}</td>
-                  <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{Number(r.amount).toLocaleString()}</td>
-                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.payment_date}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+      <div style={{ display: "inline-flex", gap: 4, background: t.surfaceAlt, borderRadius: 11, padding: 4, marginBottom: 20 }}>
+        {tabBtn("search", "ค้นหา/ดูข้อมูล")}
+        {tabBtn("import", "นำเข้าข้อมูล")}
+      </div>
+
+      {tab === "search" && (
+        <>
+          <Card t={t} style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <button onClick={() => setMode("date")} style={{ background: mode === "date" ? t.accent : "transparent", color: mode === "date" ? t.accentInk : t.ink, border: `1px solid ${mode === "date" ? t.accent : t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>ดูตามวันที่</button>
+              <button onClick={() => setMode("code")} style={{ background: mode === "code" ? t.accent : "transparent", color: mode === "code" ? t.accentInk : t.ink, border: `1px solid ${mode === "code" ? t.accent : t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>ค้นหาตามรหัสลูกค้า</button>
+            </div>
+            {mode === "date" ? (
+              <div style={{ maxWidth: 200 }}>
+                <label style={label}>วันที่</label>
+                <input type="date" style={input} value={date} onChange={(e) => setDate(e.target.value)} />
+              </div>
+            ) : (
+              <form onSubmit={runCodeSearch} style={{ display: "flex", gap: 10 }}>
+                <input style={input} placeholder="รหัสลูกค้า เช่น 9" value={code} onChange={(e) => setCode(e.target.value)} />
+                <button type="submit" style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>ค้นหา</button>
+              </form>
+            )}
+          </Card>
+          <ErrBox t={t} msg={err} />
+          <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
+            {loading ? <Loading t={t} /> : rows.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+                <thead><tr style={{ background: t.surfaceAlt }}>
+                  {["contract_id", "งวดที่", "ประเภท", "จำนวนเงิน", "วันที่จ่าย"].map((h, i) => (
+                    <th key={i} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.payment_id} style={{ borderTop: `1px solid ${t.border}` }}>
+                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.contract_id}</td>
+                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.installment_number}</td>
+                      <td style={{ padding: "9px 14px" }}>{r.payment_type || "—"}</td>
+                      <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{Number(r.amount).toLocaleString()}</td>
+                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.payment_date}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        </>
+      )}
+
+      {tab === "import" && (
+        <>
+          <ImportPasteCard t={t} token={token} branchId={branchId} />
+          <BackfillCompareCard t={t} token={token} branchId={branchId} computed={computed} />
+        </>
+      )}
     </div>
   );
 }
@@ -1458,7 +1696,7 @@ function CheckPage() {
         )}
 
         {active === "dashboard" && <DashboardPage t={t} computed={computed} />}
-        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
+        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} computed={computed} />}
         {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
         {active === "fix" && <FixPage t={t} token={session.access_token} branchId={BRANCH_ID_MAP[branch]} />}
         {active === "admin" && (
