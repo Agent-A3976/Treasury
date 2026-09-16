@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบตรวจสอบค่างวด</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/plain" id="app-source">
+const { useState, useMemo, useRef, useEffect, useCallback } = React;
+
+/* ============================================================================
+ * ไอคอนแบบง่าย วาดเอง (แทน lucide-react เพราะไฟล์เดี่ยวนี้ไม่มีตัวติดตั้ง npm)
+ * ==========================================================================*/
+const Icon = ({ size = 16, color = "currentColor", strokeWidth = 2, children }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color}
+    strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+    {children}
+  </svg>
+);
+const Sun = (p) => <Icon {...p}><circle cx="12" cy="12" r="4" /><line x1="12" y1="2" x2="12" y2="4" /><line x1="12" y1="20" x2="12" y2="22" /><line x1="4.2" y1="4.2" x2="5.6" y2="5.6" /><line x1="18.4" y1="18.4" x2="19.8" y2="19.8" /><line x1="2" y1="12" x2="4" y2="12" /><line x1="20" y1="12" x2="22" y2="12" /><line x1="4.2" y1="19.8" x2="5.6" y2="18.4" /><line x1="18.4" y1="5.6" x2="19.8" y2="4.2" /></Icon>;
+const Moon = (p) => <Icon {...p}><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z" /></Icon>;
+const Plus = (p) => <Icon {...p}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></Icon>;
+const Trash2 = (p) => <Icon {...p}><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></Icon>;
+const X = (p) => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></Icon>;
+const Search = (p) => <Icon {...p}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></Icon>;
+const ChevronDown = (p) => <Icon {...p}><polyline points="6 9 12 15 18 9" /></Icon>;
+const Bell = (p) => <Icon {...p}><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Icon>;
+const LayoutGrid = (p) => <Icon {...p}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /></Icon>;
+const ClipboardCheck = (p) => <Icon {...p}><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></Icon>;
+const Database = (p) => <Icon {...p}><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" /></Icon>;
+const Archive = (p) => <Icon {...p}><rect x="2" y="3" width="20" height="5" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><line x1="10" y1="12" x2="14" y2="12" /></Icon>;
+const Wrench = (p) => <Icon {...p}><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.5-3.5a6 6 0 0 1-8 8l-6.6 6.6a2 2 0 0 1-2.9-2.9l6.6-6.6a6 6 0 0 1 8-8z" /></Icon>;
+const ShieldCheck = (p) => <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></Icon>;
+const Wallet = (p) => <Icon {...p}><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16v-5" /><path d="M18 12a2 2 0 0 0 0 4h4v-4z" /></Icon>;
+const LogOut = (p) => <Icon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></Icon>;
+const Loader2 = (p) => <Icon {...p}><path d="M21 12a9 9 0 1 1-6.2-8.6" /></Icon>;
+const Eye = (p) => <Icon {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></Icon>;
+const EyeOff = (p) => <Icon {...p}><path d="M17.9 17.9A10.4 10.4 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 4.2-5.2M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.6 18.6 0 0 1-2.2 3.2" /><path d="M9.5 9.5a3 3 0 0 0 4.2 4.2" /><line x1="1" y1="1" x2="23" y2="23" /></Icon>;
+
+
+/* ============================================================================
+ * เชื่อมต่อ Supabase จริง — ใช้ REST API ตรงๆ ผ่าน fetch() แทนการ import
+ * @supabase/supabase-js ไม่ต้องพึ่ง npm/bundler
+ * publishable key ปลอดภัยที่จะฝังในโค้ดฝั่งเว็บ (RLS ที่ตั้งไว้คือด่านความปลอดภัยจริง)
+ * ==========================================================================*/
+const SUPABASE_URL = "https://cymyqbmurimvceddcvwr.supabase.co";
+const SUPABASE_KEY = "sb_publishable_M_RosodL3Y0NjcVeoNFnbg_VcLEWEGL";
+
+async function supabaseAuth(path, body) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.msg || data.error || "เกิดข้อผิดพลาด");
+  return data;
+}
+
+async function supabaseRest(path, { method = "GET", token, body } = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${token}`,
+      ...(method === "POST" ? { Prefer: "return=representation" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.error || "เรียกฐานข้อมูลไม่สำเร็จ");
+  return data;
+}
+
+const THEME = {
+  light: {
+    bg: "#F4F6F8", surface: "#FFFFFF", surfaceAlt: "#EEF1F4", sidebar: "#12181D", border: "#DCE3E8",
+    ink: "#14181D", ink2: "#5B6672", ink3: "#8A949E", sidebarInk: "#B6C2CC", sidebarInkMute: "#5E6B75",
+    accent: "#0C7C92", accentSoft: "#E3F4F6", accentInk: "#FFFFFF",
+    ok: "#158F53", okSoft: "#E3F6EC", warn: "#B8720A", warnSoft: "#FBF0DD",
+    bad: "#C23B3B", badSoft: "#FBE9E9", info: "#5B4FD9", infoSoft: "#ECEBFC",
+    neutral: "#6B7280", neutralSoft: "#EEF0F2", shadow: "0 1px 2px rgba(20,24,29,.05)",
+  },
+  dark: {
+    bg: "#0B0F13", surface: "#141B21", surfaceAlt: "#1A2229", sidebar: "#0A0E12", border: "#232C33",
+    ink: "#E7EEF2", ink2: "#8C99A3", ink3: "#5E6B75", sidebarInk: "#C7D1D9", sidebarInkMute: "#5E6B75",
+    accent: "#4FD9E8", accentSoft: "rgba(79,217,232,0.12)", accentInk: "#04181C",
+    ok: "#5EE39B", okSoft: "rgba(94,227,155,0.12)", warn: "#F5B94D", warnSoft: "rgba(245,185,77,0.12)",
+    bad: "#F5716A", badSoft: "rgba(245,113,106,0.12)", info: "#A99CFF", infoSoft: "rgba(169,156,255,0.12)",
+    neutral: "#97A2AC", neutralSoft: "rgba(151,162,172,0.10)", shadow: "0 1px 2px rgba(0,0,0,.3)",
+  },
+};
+const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');`;
+
+const NAV = [
+  { key: "check", label: "ตรวจสอบ", icon: ClipboardCheck },
+  { key: "dashboard", label: "Dashboard", icon: LayoutGrid },
+  { key: "wr", label: "Working Reference", icon: Database },
+  { key: "archive", label: "Archive", icon: Archive },
+  { key: "fix", label: "ตรวจ+ซ่อมงวด", icon: Wrench },
+  { key: "admin", label: "Admin", icon: ShieldCheck },
+];
+
+function parsePeriod(raw) {
+  const clean = String(raw ?? "").trim();
+  if (!clean) return null;
+  const m = clean.match(/^(\d+)\s*(?:-\s*(\d+))?\s*(?:\(\s*(.+?)\s*\))?$/);
+  if (!m) return null;
+  const start = parseInt(m[1], 10);
+  const end = m[2] ? parseInt(m[2], 10) : start;
+  const status = m[3] || null;
+  if (isNaN(start) || isNaN(end) || start < 1 || end < start) return null;
+  return { start, end, status, raw: clean };
+}
+
+// ค้นหาสัญญาของรหัสนี้จากฐานข้อมูลจริง — ถ้ามีหลายสัญญา (รหัสถูกใช้ซ้ำ) เลือกตัวที่ status=active
+// ก่อนเสมอ เหมือน logic เดิมตอนย้ายข้อมูล ไม่งั้นค่อยใช้ตัวล่าสุดตามวันที่เริ่ม
+async function fetchContractForCode(token, branchId, deviceCode) {
+  const rows = await supabaseRest(
+    `contracts?device_code=eq.${encodeURIComponent(deviceCode)}&branch_id=eq.${encodeURIComponent(branchId)}&select=*&order=start_date.desc`,
+    { token }
+  );
+  if (!rows.length) return null;
+  return rows.find((c) => c.status === "active") || rows[0];
+}
+
+async function fetchAlreadyPaid(token, contractId, installmentNumber) {
+  const rows = await supabaseRest(
+    `payments?contract_id=eq.${contractId}&installment_number=eq.${installmentNumber}&select=payment_id&limit=1`,
+    { token }
+  );
+  return rows.length > 0;
+}
+
+async function checkRowLive(row, priorRowsInBatch, token, branchId, contractCache) {
+  const code = row.code.trim();
+  const amount = parseFloat(row.amount);
+  if (!code || !row.period || !row.amount) return { status: "", tone: "neutral" };
+
+  const dupInBatch = priorRowsInBatch.some(
+    (r) => r.code.trim() === code && r.period.trim() === row.period.trim() && parseFloat(r.amount) === amount
+  );
+  if (dupInBatch) return { status: "ซ้ำในรายการที่เพิ่งพิมพ์", tone: "warn" };
+
+  const p = parsePeriod(row.period);
+  if (!p) return { status: "รูปแบบงวดไม่ถูกต้อง", tone: "bad" };
+
+  let contract = contractCache.current.get(code);
+  if (contract === undefined) {
+    try {
+      contract = await fetchContractForCode(token, branchId, code);
+    } catch (e) {
+      return { status: `เชื่อมต่อไม่สำเร็จ: ${e.message}`, tone: "bad" };
+    }
+    contractCache.current.set(code, contract);
+  }
+
+  if (!contract) {
+    return p.start === 1
+      ? { status: "ลูกค้าใหม่ (ยังไม่มีสัญญาอ้างอิง)", tone: "info" }
+      : { status: "ไม่พบข้อมูลลูกค้า", tone: "bad" };
+  }
+  if (contract.status !== "active") {
+    return { status: `สัญญานี้ปิดแล้ว (${contract.status === "closed" ? "ผ่อนจบ" : "คืนเครื่อง"})`, tone: "warn" };
+  }
+  if (isNaN(amount) || amount <= 0) return { status: "จำนวนเงินไม่ถูกต้อง", tone: "bad" };
+
+  if (!p.status) {
+    let alreadyPaid;
+    try {
+      alreadyPaid = await fetchAlreadyPaid(token, contract.contract_id, p.start);
+    } catch (e) {
+      return { status: `เชื่อมต่อไม่สำเร็จ: ${e.message}`, tone: "bad" };
+    }
+    if (alreadyPaid) return { status: "งวดนี้จ่ายครบไปแล้ว", tone: "warn" };
+    if (amount === Number(contract.amount_per_installment)) return { status: "ถูก", tone: "ok", contractId: contract.contract_id, installmentNumber: p.start };
+    return { status: `จำนวนเงินไม่ตรง (ควรเป็น ${Number(contract.amount_per_installment).toLocaleString()})`, tone: "bad" };
+  }
+  if (p.status.includes("บางส่วน") || p.status.includes("สะสม"))
+    return { status: `รับไว้ (${p.status})`, tone: "info", contractId: contract.contract_id, installmentNumber: p.start, paymentType: p.status };
+  if (p.status.includes("ครบ") || p.status.includes("จบ"))
+    return { status: "ถูก (ครบงวด)", tone: "ok", contractId: contract.contract_id, installmentNumber: p.start, paymentType: p.status };
+  return { status: `สถานะ "${p.status}" ไม่รู้จัก`, tone: "bad" };
+}
+const TONE_DOT = { ok: "●", warn: "●", bad: "●", info: "●", neutral: "●", loading: "○" };
+
+// สาขาที่มีข้อมูลจริงอยู่ในฐานข้อมูลตอนนี้มีแค่ "surat" (จากการย้ายข้อมูลที่ทำไปก่อนหน้า)
+// สาขาอื่นยังไม่ได้ทำ ใส่ไว้ในตัวเลือกเผื่ออนาคตแต่ตอนนี้จะไม่พบข้อมูลใดๆ
+const BRANCH_ID_MAP = { "สุราษฎร์ธานี": "surat", "สมุย": "samui", "หลังสวน": "langsuan" };
+
+// ตรวจทีละแถวตามลำดับ (ไม่ขนาน) เพราะการเช็ค "ซ้ำในรายการที่เพิ่งพิมพ์" ต้องรู้ผลของแถวก่อนหน้า
+// ก่อนเสมอ — cache ผลค้นหาสัญญาต่อรหัสไว้ใน session เดียวกัน ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว
+function useComputedRows(rows, token, branchId) {
+  const [results, setResults] = useState({});
+  const contractCache = useRef(new Map());
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    contractCache.current = new Map();
+    (async () => {
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        setResults((prev) => ({ ...prev, [r.id]: { status: "", tone: "loading" } }));
+      }
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const res = await checkRowLive(r, rows.slice(0, i), token, branchId, contractCache);
+        if (cancelled) return;
+        setResults((prev) => ({ ...prev, [r.id]: res }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [rows, token, branchId]);
+
+  return rows.map((r) => ({ ...r, result: results[r.id] || { status: "", tone: "neutral" } }));
+}
+
+// ---------------------------------------------------------------------------
+// หน้า login/สมัคร — ใช้ Supabase Auth ตรงๆ ผ่าน REST (ไม่มี password ไหนถูกส่งแบบ
+// query string แบบระบบเดิมอีกแล้ว เป็น POST body เข้ารหัส TLS ทั้งหมด)
+// ---------------------------------------------------------------------------
+function usernameToInternalEmail(username) {
+  const safe = String(username).trim().toLowerCase().replace(/[^a-z0-9._-]/g, "");
+  return `${safe || "user"}@treasury-staff.com`;
+}
+
+function LoginScreen({ t, mode, setMode, onAuthed }) {
+  const [isSignup, setIsSignup] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [signupDone, setSignupDone] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr(""); setBusy(true);
+    const email = usernameToInternalEmail(username);
+    try {
+      if (isSignup) {
+        await supabaseAuth("signup", { email, password, data: { username: username.trim() } });
+        setSignupDone(true);
+      } else {
+        const data = await supabaseAuth("token?grant_type=password", { email, password });
+        onAuthed(data);
+      }
+    } catch (e2) {
+      setErr(e2.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const input = {
+    width: "100%", padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.border}`,
+    background: t.surface, color: t.ink, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box",
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: t.bg, color: t.ink, fontFamily: "'IBM Plex Sans Thai', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <style>{FONT_IMPORT}</style>
+      <button onClick={() => setMode(mode === "dark" ? "light" : "dark")} style={{ position: "absolute", top: 20, right: 20, width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink }}>
+        {mode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+      </button>
+      <div style={{ width: "100%", maxWidth: 360 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 26, justifyContent: "center" }}>
+          <div style={{ width: 34, height: 34, borderRadius: 9, background: t.accent, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Wallet size={17} color={t.accentInk} />
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>ระบบตรวจสอบค่างวด</div>
+        </div>
+
+        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: 22, boxShadow: t.shadow }}>
+          {signupDone ? (
+            <div style={{ textAlign: "center", padding: "10px 0" }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>สมัครสำเร็จ</div>
+              <div style={{ fontSize: 13, color: t.ink2, lineHeight: 1.6 }}>
+                บัญชีของคุณรอแอดมินอนุมัติสิทธิ์ก่อนถึงจะใช้งานได้ — ล็อกอินได้เลย ระบบจะแจ้งสถานะให้ทราบ
+              </div>
+              <button onClick={() => { setIsSignup(false); setSignupDone(false); }} style={{ marginTop: 16, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                ไปหน้าล็อกอิน
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={submit}>
+              <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 16 }}>{isSignup ? "สมัครใช้งาน" : "เข้าสู่ระบบ"}</div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, color: t.ink2, marginBottom: 5, display: "block", fontWeight: 500 }}>รหัสผู้ใช้</label>
+                <input style={input} type="text" required value={username} onChange={(e) => setUsername(e.target.value)} placeholder="เช่น pim01 (ตัวอักษรอังกฤษ/ตัวเลข)" autoCapitalize="off" />
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ fontSize: 12, color: t.ink2, marginBottom: 5, display: "block", fontWeight: 500 }}>รหัสผ่าน</label>
+                <div style={{ position: "relative" }}>
+                  <input style={{ ...input, paddingRight: 40 }} type={showPassword ? "text" : "password"} required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="อย่างน้อย 6 ตัวอักษร" />
+                  <button type="button" onClick={() => setShowPassword((s) => !s)} aria-label={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"} style={{ position: "absolute", right: 4, top: 4, width: 30, height: 30, background: "none", border: "none", cursor: "pointer", color: t.ink3, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+              {!isSignup && (
+                <button type="button" onClick={() => setShowForgot((s) => !s)} style={{ background: "none", border: "none", color: t.ink3, fontSize: 12, cursor: "pointer", fontFamily: "inherit", padding: 0, marginBottom: 8 }}>
+                  ลืมรหัสผ่าน?
+                </button>
+              )}
+              {showForgot && !isSignup && (
+                <div style={{ background: t.warnSoft, color: t.warn, borderRadius: 8, padding: "10px 12px", fontSize: 12, lineHeight: 1.6, marginBottom: 12 }}>
+                  ระบบนี้ใช้รหัสผู้ใช้ภายในองค์กร ไม่มีอีเมลจริงให้ส่งลิงก์รีเซ็ต — กรุณาติดต่อแอดมินของสาขาให้ช่วยตั้งรหัสผ่านใหม่ให้โดยตรง
+                </div>
+              )}
+              {err && <div style={{ color: t.bad, fontSize: 12.5, marginTop: 8 }}>{err}</div>}
+              <button type="submit" disabled={busy} style={{ width: "100%", marginTop: 16, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13.5, fontWeight: 600, cursor: busy ? "default" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: busy ? 0.7 : 1 }}>
+                {busy && <Loader2 size={14} className="spin" />}
+                {isSignup ? "สมัครใช้งาน" : "เข้าสู่ระบบ"}
+              </button>
+              <button type="button" onClick={() => { setIsSignup((s) => !s); setErr(""); }} style={{ width: "100%", marginTop: 10, background: "none", border: "none", color: t.accent, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>
+                {isSignup ? "มีบัญชีอยู่แล้ว? เข้าสู่ระบบ" : "ยังไม่มีบัญชี? สมัครใช้งาน"}
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+      <style>{`.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+}
+
+function CheckPage() {
+  const [mode, setMode] = useState("dark");
+  const t = THEME[mode];
+  const [active, setActive] = useState("check");
+
+  // ---------- auth state ----------
+  const [session, setSession] = useState(null); // {access_token, user}
+  const [profile, setProfile] = useState(null); // แถวจากตาราง users ของคนที่ login อยู่
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  const loadProfile = useCallback(async (token, userId) => {
+    setProfileLoading(true);
+    try {
+      const rows = await supabaseRest(`users?user_id=eq.${userId}&select=*`, { token });
+      setProfile(rows[0] || null);
+    } catch {
+      setProfile(null);
+    } finally {
+      setProfileLoading(false);
+    }
+  }, []);
+
+  function handleAuthed(data) {
+    setSession(data);
+    loadProfile(data.access_token, data.user.id);
+  }
+  function handleLogout() {
+    setSession(null);
+    setProfile(null);
+  }
+
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
+  const [showExtra, setShowExtra] = useState(false);
+  const [search, setSearch] = useState("");
+  const [branch, setBranch] = useState("สุราษฎร์ธานี");
+  const nextId = useRef(1);
+  const periodRef = useRef(null);
+  const amountRef = useRef(null);
+
+  const computed = useComputedRows(rows, session?.access_token, BRANCH_ID_MAP[branch]);
+  const filtered = computed.filter((r) => {
+    if (!search.trim()) return true;
+    const q = search.trim().toLowerCase();
+    return r.code.toLowerCase().includes(q) || r.period.toLowerCase().includes(q);
+  });
+
+  function addRow(e) {
+    e?.preventDefault();
+    if (!form.code.trim()) return;
+    setRows((prev) => [...prev, { id: nextId.current++, ...form }]);
+    setForm({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
+    document.getElementById("code-input")?.focus();
+  }
+  function removeRow(id) { setRows((prev) => prev.filter((r) => r.id !== id)); }
+  function clearAll() { setRows([]); }
+  function handlePasteCode(e) {
+    const text = e.clipboardData.getData("text");
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length >= 3) {
+      e.preventDefault();
+      setForm((f) => ({ ...f, code: lines[0], period: lines[1], amount: lines[2] }));
+      setTimeout(() => amountRef.current?.focus(), 0);
+    }
+  }
+
+  const input = {
+    width: "100%", padding: "9px 11px", borderRadius: 8, border: `1px solid ${t.border}`,
+    background: t.surface, color: t.ink, fontSize: 14, fontFamily: "'IBM Plex Mono', monospace",
+    outline: "none", boxSizing: "border-box",
+  };
+  const label = { fontSize: 12, color: t.ink2, marginBottom: 5, display: "block", fontWeight: 500 };
+
+  // ---------- ด่านตรวจสิทธิ์ก่อนเข้าเนื้อหาจริง ----------
+  if (!session) {
+    return <LoginScreen t={t} mode={mode} setMode={setMode} onAuthed={handleAuthed} />;
+  }
+  if (profileLoading || profile === null) {
+    return (
+      <div style={{ minHeight: "100vh", background: t.bg, color: t.ink2, fontFamily: "'IBM Plex Sans Thai', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5 }}>
+        <style>{FONT_IMPORT}</style>
+        <Loader2 size={16} className="spin" /> กำลังโหลดโปรไฟล์...
+        <style>{`.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
+  if (!profile.is_active) {
+    return (
+      <div style={{ minHeight: "100vh", background: t.bg, color: t.ink, fontFamily: "'IBM Plex Sans Thai', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <style>{FONT_IMPORT}</style>
+        <div style={{ textAlign: "center", maxWidth: 340 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 99, background: t.warnSoft, color: t.warn, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
+            <ShieldCheck size={20} />
+          </div>
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>บัญชีรออนุมัติ</div>
+          <div style={{ fontSize: 13, color: t.ink2, lineHeight: 1.6, marginBottom: 18 }}>
+            เข้าสู่ระบบสำเร็จแล้ว แต่บัญชี <b>{profile.username}</b> ยังรอแอดมินเปิดสิทธิ์ใช้งาน — ติดต่อแอดมินของสาขาเพื่อขอเปิดสิทธิ์
+          </div>
+          <button onClick={handleLogout} style={{ background: "transparent", border: `1px solid ${t.border}`, color: t.ink, borderRadius: 8, padding: "9px 18px", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+            ออกจากระบบ
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", minHeight: "100vh", background: t.bg, color: t.ink, fontFamily: "'IBM Plex Sans Thai', sans-serif" }}>
+      <style>{FONT_IMPORT}</style>
+
+      <aside style={{ width: 220, background: t.sidebar, padding: "20px 14px", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "0 8px", marginBottom: 28 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: t.accent, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Wallet size={15} color={mode === "dark" ? t.accentInk : "#fff"} />
+          </div>
+          <div>
+            <div style={{ color: "#fff", fontWeight: 700, fontSize: 13.5, lineHeight: 1.2 }}>ตรวจค่างวด</div>
+            <div style={{ color: t.sidebarInkMute, fontSize: 10.5 }}>สุราษฎร์ธานี</div>
+          </div>
+        </div>
+
+        <nav style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          {NAV.map((n) => {
+            const isActive = active === n.key;
+            return (
+              <button
+                key={n.key}
+                onClick={() => setActive(n.key)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 9,
+                  background: isActive ? t.accent : "transparent", color: isActive ? t.accentInk : t.sidebarInk,
+                  border: "none", cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: isActive ? 600 : 400,
+                  textAlign: "left", transition: "background .15s",
+                }}
+              >
+                <n.icon size={15} />
+                {n.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div style={{ marginTop: "auto", paddingTop: 16, borderTop: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 99, background: t.infoSoft, color: t.info, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+            {(profile.nickname || profile.username || "?")[0].toUpperCase()}
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ color: "#fff", fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{profile.nickname || profile.username}</div>
+            <div style={{ color: t.sidebarInkMute, fontSize: 10.5 }}>{profile.is_admin ? "Admin" : "พนักงาน"}</div>
+          </div>
+          <button onClick={handleLogout} aria-label="ออกจากระบบ" title="ออกจากระบบ" style={{ background: "none", border: "none", color: t.sidebarInkMute, cursor: "pointer", padding: 4, flexShrink: 0 }}>
+            <LogOut size={14} />
+          </button>
+        </div>
+      </aside>
+
+      <main style={{ flex: 1, padding: "22px 28px 60px", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 22 }}>
+          <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
+            <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: t.ink3 }} />
+            <input placeholder="ค้นหารหัสลูกค้า, งวด..." style={{ ...input, padding: "9px 12px 9px 34px", fontFamily: "inherit" }} />
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ position: "relative" }}>
+              <select value={branch} onChange={(e) => setBranch(e.target.value)} style={{ appearance: "none", padding: "8px 30px 8px 12px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, color: t.ink, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>
+                <option>สุราษฎร์ธานี</option><option>สมุย</option><option>หลังสวน</option>
+              </select>
+              <ChevronDown size={14} style={{ position: "absolute", right: 10, top: 10, color: t.ink2, pointerEvents: "none" }} />
+            </div>
+            <button style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink, position: "relative" }}>
+              <Bell size={15} />
+              <span style={{ position: "absolute", top: 6, right: 7, width: 6, height: 6, borderRadius: 99, background: t.bad }} />
+            </button>
+            <button onClick={() => setMode(mode === "dark" ? "light" : "dark")} aria-label="สลับโหมด" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink }}>
+              {mode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
+          </div>
+        </div>
+
+        <h1 style={{ fontSize: 21, fontWeight: 700, margin: "0 0 3px", letterSpacing: -0.3 }}>ตรวจสอบการรับชำระเงิน</h1>
+        <div style={{ fontSize: 12.5, color: t.ink2, marginBottom: 20, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ position: "relative", width: 7, height: 7, borderRadius: 99, background: t.ok, display: "inline-block" }}>
+            <span style={{ position: "absolute", inset: 0, borderRadius: 99, background: t.ok, opacity: 0.5, animation: "pulse 2s infinite" }} />
+          </span>
+          เชื่อมต่อฐานข้อมูลแล้ว · วันที่ {new Date().toLocaleDateString("th-TH", { day: "numeric", month: "long", year: "numeric" })}
+        </div>
+
+        <form onSubmit={addRow} style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: 18, marginBottom: 20, boxShadow: t.shadow }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+            <Plus size={16} color={t.accent} />
+            <span style={{ fontWeight: 600, fontSize: 14.5 }}>เพิ่มรายการรับชำระเงิน</span>
+            <span style={{ marginLeft: "auto", fontSize: 11.5, color: t.ink3 }}>วาง 3 บรรทัด (รหัส/งวด/ยอด) ลงช่องรหัส ระบบกระจายให้เอง</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={label}>รหัสลูกค้า</label>
+              <input id="code-input" style={input} placeholder="เช่น 9" value={form.code} onPaste={handlePasteCode}
+                onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && periodRef.current?.focus()} />
+            </div>
+            <div>
+              <label style={label}>งวดที่</label>
+              <input ref={periodRef} style={input} placeholder="เช่น 1 หรือ 2(บางส่วน)" value={form.period}
+                onChange={(e) => setForm((f) => ({ ...f, period: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && amountRef.current?.focus()} />
+            </div>
+            <div>
+              <label style={label}>จำนวนเงิน</label>
+              <input ref={amountRef} style={input} placeholder="฿ 0" value={form.amount}
+                onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && addRow(e)} />
+            </div>
+          </div>
+          <button type="button" onClick={() => setShowExtra((s) => !s)} style={{ background: "none", border: "none", color: t.accent, fontSize: 12.5, padding: "10px 0 0", cursor: "pointer", fontFamily: "inherit" }}>
+            {showExtra ? "− ซ่อนข้อมูลเพิ่มเติม" : "+ ข้อมูลเพิ่มเติม (ค่าธรรมเนียม / สะสม / ยอดตามสลิป)"}
+          </button>
+          {showExtra && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 10 }}>
+              <div><label style={label}>ค่าธรรมเนียม</label><input style={input} placeholder="เว้นว่างได้" value={form.fee} onChange={(e) => setForm((f) => ({ ...f, fee: e.target.value }))} /></div>
+              <div><label style={label}>สะสม (เดี่ยว)</label><input style={input} placeholder="เว้นว่างได้" value={form.cum} onChange={(e) => setForm((f) => ({ ...f, cum: e.target.value }))} /></div>
+              <div><label style={label}>ยอดตามสลิป</label><input style={input} placeholder="เว้นว่างได้" value={form.slip} onChange={(e) => setForm((f) => ({ ...f, slip: e.target.value }))} /></div>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button type="submit" style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+              <Plus size={15} /> เพิ่มรายการ
+            </button>
+            <button type="button" onClick={clearAll} style={{ background: "transparent", color: t.bad, border: `1px solid ${t.border}`, borderRadius: 8, padding: "10px 16px", fontSize: 13.5, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+              <Trash2 size={14} /> ล้างรายการทั้งหมด
+            </button>
+          </div>
+        </form>
+
+        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: "hidden", boxShadow: t.shadow }}>
+          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontWeight: 600, fontSize: 14.5 }}>รายการวันนี้</span>
+            <span style={{ color: t.ink3, fontSize: 12.5, fontFamily: "'IBM Plex Mono', monospace" }}>{computed.length} แถว</span>
+            <div style={{ marginLeft: "auto", position: "relative", width: 200 }}>
+              <Search size={13} style={{ position: "absolute", left: 10, top: 10, color: t.ink3 }} />
+              <input placeholder="กรองในตาราง..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...input, padding: "7px 10px 7px 30px", fontSize: 12.5, fontFamily: "inherit" }} />
+            </div>
+          </div>
+          {filtered.length === 0 ? (
+            <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ยังไม่มีรายการ — เพิ่มรายการรับชำระเงินด้านบนเพื่อเริ่มตรวจสอบ</div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+              <thead>
+                <tr style={{ background: t.surfaceAlt }}>
+                  {["#", "รหัสลูกค้า", "งวดที่", "จำนวนเงิน", "ผลการตรวจสอบ", ""].map((h, i) => (
+                    <th key={i} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r, idx) => (
+                  <tr key={r.id} style={{ borderTop: `1px solid ${t.border}` }}>
+                    <td style={{ padding: "10px 14px", color: t.ink3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{idx + 1}</td>
+                    <td style={{ padding: "10px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.code}</td>
+                    <td style={{ padding: "10px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.period}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.amount ? Number(r.amount).toLocaleString() : "—"}</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      {r.result.status ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, background: t[r.result.tone + "Soft"], color: t[r.result.tone], borderRadius: 99, padding: "3px 10px", fontSize: 12, fontWeight: 600 }}>
+                          <span style={{ fontSize: 8 }}>{TONE_DOT[r.result.tone]}</span>{r.result.status}
+                        </span>
+                      ) : (<span style={{ color: t.ink3 }}>—</span>)}
+                    </td>
+                    <td style={{ padding: "10px 14px", textAlign: "right" }}>
+                      <button onClick={() => removeRow(r.id)} aria-label="ลบแถว" style={{ background: "none", border: "none", color: t.ink3, cursor: "pointer", padding: 4 }}><X size={14} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div style={{ marginTop: 18, fontSize: 11.5, color: t.ink3 }}>เชื่อมต่อฐานข้อมูลจริงแล้ว — ยังไม่มีปุ่มบันทึกถาวร (ตรวจสอบสถานะได้แต่ยังไม่เขียนข้อมูลใหม่ลง Supabase) จะเพิ่มในขั้นถัดไป</div>
+      </main>
+
+      <style>{`
+        @keyframes pulse { 0%,100%{transform:scale(1);opacity:.5} 50%{transform:scale(2.2);opacity:0} }
+        select:focus, input:focus { border-color: ${t.accent} !important; box-shadow: 0 0 0 3px ${t.accentSoft}; }
+      `}</style>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<CheckPage />);
+</script>
+<script>
+  const source = document.getElementById('app-source').textContent;
+  const output = Babel.transform(source, {
+    presets: [["react", { runtime: "classic" }]],
+  }).code;
+  (0, eval)(output);
+</script>
+</body>
+</html>
