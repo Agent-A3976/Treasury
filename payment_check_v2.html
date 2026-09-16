@@ -14,9 +14,12 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel" data-presets="react">
-const { useState, useMemo, useRef, useEffect, useCallback } = React;
 
+<!-- เก็บซอร์ส JSX ไว้เป็นข้อความธรรมดา (type="text/plain" เบราว์เซอร์จะไม่พยายามรันเอง) แล้วค่อย
+     สั่งแปลงด้วย Babel.transform() ตรงๆ ด้วยมือ ระบุ runtime:"classic" ชัดเจน กัน Babel เวอร์ชันใหม่
+     auto-inject import statement ของ JSX runtime อัตโนมัติ (ค่าเริ่มต้นใหม่ของเขาเปลี่ยนไปแล้ว
+     ทั้งที่โค้ดต้นฉบับไม่มี import อยู่เลยสักบรรทัด) -->
+<script type="text/plain" id="app-source">
 /* ============================================================================
  * ไอคอนแบบง่าย วาดเอง (แทน lucide-react เพราะไฟล์เดี่ยวนี้ไม่มีตัวติดตั้ง npm)
  * ==========================================================================*/
@@ -43,7 +46,6 @@ const ShieldCheck = (p) => <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 
 const Wallet = (p) => <Icon {...p}><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16v-5" /><path d="M18 12a2 2 0 0 0 0 4h4v-4z" /></Icon>;
 const LogOut = (p) => <Icon {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></Icon>;
 const Loader2 = (p) => <Icon {...p}><path d="M21 12a9 9 0 1 1-6.2-8.6" /></Icon>;
-
 
 
 /* ============================================================================
@@ -607,8 +609,14 @@ function CheckPage() {
   );
 }
 
-
 ReactDOM.createRoot(document.getElementById('root')).render(<CheckPage />);
+</script>
+<script>
+  const source = document.getElementById('app-source').textContent;
+  const output = Babel.transform(source, {
+    presets: [["react", { runtime: "classic" }]],
+  }).code;
+  (0, eval)(output);
 </script>
 </body>
 </html>
