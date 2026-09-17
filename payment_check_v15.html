@@ -668,15 +668,32 @@ async function postPaymentRow(token, branchId, code, period, amount, isoDate, co
     contract = await fetchContractForCode(token, branchId, code);
     contractCache.set(code, contract);
   }
-  if (!contract) return { ok: false, msg: `ไม่พบรหัสลูกค้า "${code}" ในสาขานี้` };
   const installment_number = p.hasDash ? p.end : p.start;
   const payment_type = p.status || null;
+
+  // ไม่พบสัญญาของรหัสนี้ — เดิมทิ้งข้อมูลนี้ไปเลย (แค่โชว์ error ชั่วคราวในหน้าจอ ไม่มีที่เก็บถาวร)
+  // ตอนนี้บันทึกลง DB จริงแบบ needs_review=true (contract_id ว่างไว้ก่อน) แทน จะได้ไม่หายไปเงียบๆ
+  // และให้ทุกคนที่ login เห็นในหน้า Working Reference > "ลูกค้าที่ยังไม่มีสัญญา" ได้ ไม่ใช่แค่เครื่อง
+  // ที่นำเข้าเอง — พอมีคนสร้างสัญญาให้รหัสนี้ทีหลัง แถวนี้จะถูกจับคู่เข้ากับสัญญาใหม่ให้อัตโนมัติ
+  if (!contract) {
+    const dupOrphan = await supabaseRest(
+      `payments?contract_id=is.null&device_code=eq.${encodeURIComponent(code)}&installment_number=eq.${installment_number}&amount=eq.${amount}&payment_date=eq.${isoDate}&select=payment_id&limit=1`,
+      { token }
+    );
+    if (dupOrphan.length) return { ok: false, msg: `ซ้ำ — มีแถวรอตรวจสอบของรหัส "${code}" งวดนี้อยู่แล้ว` };
+    await supabaseRest("payments", {
+      method: "POST", token,
+      body: { contract_id: null, device_code: code, installment_number, payment_type, amount, payment_date: isoDate, needs_review: true, review_reason: "ไม่พบรหัสนี้ในตาราง contracts เลย" },
+    });
+    return { ok: true, msg: `ไม่พบรหัสลูกค้า "${code}" — บันทึกเป็นรอตรวจสอบไว้แล้ว (ดูที่ Working Reference > ลูกค้าที่ยังไม่มีสัญญา)` };
+  }
+
   const dup = await supabaseRest(
     `payments?contract_id=eq.${contract.contract_id}&installment_number=eq.${installment_number}&amount=eq.${amount}&payment_date=eq.${isoDate}&select=payment_id&limit=1`,
     { token }
   );
   if (dup.length) return { ok: false, msg: `ซ้ำ — มีแถวนี้อยู่ในฐานข้อมูลแล้ว (contract_id ${contract.contract_id})` };
-  await supabaseRest("payments", { method: "POST", token, body: { contract_id: contract.contract_id, installment_number, payment_type, amount, payment_date: isoDate } });
+  await supabaseRest("payments", { method: "POST", token, body: { contract_id: contract.contract_id, device_code: code, installment_number, payment_type, amount, payment_date: isoDate } });
   return { ok: true, msg: `บันทึกแล้ว (contract_id ${contract.contract_id} งวด ${installment_number})` };
 }
 
@@ -1021,8 +1038,16 @@ function MissingContractRow({ t, token, branchId, code, onCreated }) {
       total_installments: parseInt(totalInstallments, 10),
       amount_per_installment: parseFloat(amountPerInstallment),
     });
+    if (!r.ok) { setSaving(false); setErr(r.msg); return; }
+    // จับคู่แถวรอตรวจสอบ (contract_id ว่าง) ของรหัสนี้ที่ค้างอยู่ใน DB เข้ากับสัญญาที่เพิ่งสร้างให้อัตโนมัติ
+    // หมายเหตุ: จับคู่ด้วยรหัสล้วนๆ เพราะ payments ไม่มีคอลัมน์สาขา ถ้ารหัสซ้ำกันข้ามสาขาอาจจับผิดสาขาได้
+    // (กรณีน้อยมาก แก้ทีหลังผ่าน "ตรวจ+ซ่อมงวด" ได้ถ้าเจอ)
+    try {
+      await supabaseRest(`payments?contract_id=is.null&device_code=eq.${encodeURIComponent(code)}`, {
+        method: "PATCH", token, body: { contract_id: r.contract.contract_id, needs_review: false },
+      });
+    } catch { /* สัญญาสร้างสำเร็จแล้ว จับคู่ payment เก่าไม่สำเร็จก็ไม่ควรบล็อกผู้ใช้ ปล่อยให้ไปแก้ทีหลังได้ */ }
     setSaving(false);
-    if (!r.ok) { setErr(r.msg); return; }
     setOpen(false);
     onCreated?.();
   }
@@ -1065,29 +1090,43 @@ function MissingContractRow({ t, token, branchId, code, onCreated }) {
   );
 }
 
-// ลูกค้าที่ยังไม่มีสัญญา — ดึงจากรายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ (computed prop
-// เดียวกับที่หน้าตรวจสอบใช้) กรองเอาเฉพาะรหัสที่ผลออกมาเป็น "ไม่พบข้อมูลลูกค้า" — รหัสเป็นข้อความจริง
-// ที่พิมพ์วันนี้ (ต่างจากประวัติเก่าที่ไม่มีคอลัมน์เก็บรหัสไว้เลย เลยทำแบบนี้กับข้อมูลเก่าไม่ได้)
+// ลูกค้าที่ยังไม่มีสัญญา — รวม 2 แหล่ง: (1) รายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ (computed
+// prop) ที่ผลออกมาเป็น "ไม่พบข้อมูลลูกค้า" กับ (2) payments ที่บันทึกไว้จริงใน DB ตอนนำเข้าข้อมูลแล้ว
+// หาสัญญาไม่เจอ (contract_id ว่าง, needs_review=true, มี device_code เก็บไว้แล้วตั้งแต่ v15 เป็นต้นไป)
+// แหล่งที่ 2 เห็นเหมือนกันทุกคนที่ login ไม่ผูกกับเครื่อง/เบราว์เซอร์เหมือนแหล่งที่ 1
 function MissingContractList({ t, token, branchId, computed, onContractCreated }) {
+  const [dbCodes, setDbCodes] = useState([]);
+  const [loadingDb, setLoadingDb] = useState(true);
+
+  async function loadDbCodes() {
+    setLoadingDb(true);
+    try {
+      const rows = await supabaseRest(`payments?contract_id=is.null&needs_review=eq.true&device_code=not.is.null&select=device_code&limit=500`, { token });
+      setDbCodes(Array.from(new Set(rows.map((r) => r.device_code).filter(Boolean))));
+    } catch { setDbCodes([]); }
+    finally { setLoadingDb(false); }
+  }
+  useEffect(() => { if (token) loadDbCodes(); }, [token]);
+
   const codes = useMemo(() => {
-    const set = new Set();
+    const set = new Set(dbCodes);
     computed.forEach((r) => {
       if (r.result?.status === "ไม่พบข้อมูลลูกค้า" && r.code && r.code.trim()) set.add(r.code.trim());
     });
     return Array.from(set);
-  }, [computed]);
+  }, [computed, dbCodes]);
 
   return (
     <div>
       <Card t={t} style={{ marginBottom: 16 }}>
-        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>ลูกค้าที่ยังไม่มีสัญญา{codes.length > 0 && ` (${codes.length})`}</div>
+        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>ลูกค้าที่ยังไม่มีสัญญา{!loadingDb && codes.length > 0 && ` (${codes.length})`}</div>
         <div style={{ fontSize: 12, color: t.ink2, lineHeight: 1.6 }}>
-          รวมรหัสลูกค้าจากรายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ ที่ระบบหาสัญญาในสาขาที่เลือกไม่เจอ — กด "เพิ่มสัญญา" แล้วกรอกแค่วันที่เริ่ม/จำนวนงวด/ยอดต่องวด รายการตรวจสอบจะรีเช็คให้อัตโนมัติหลังบันทึกเสร็จ
+          รวมรหัสลูกค้าจาก 2 แหล่ง: รายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ + รายการที่บันทึกไว้ในฐานข้อมูลตอนนำเข้าข้อมูลแล้วหาสัญญาไม่เจอ (เห็นเหมือนกันทุกคน) — กด "เพิ่มสัญญา" แล้วกรอกแค่วันที่เริ่ม/จำนวนงวด/ยอดต่องวด ระบบจะจับคู่รายการที่ค้างไว้เข้ากับสัญญาใหม่และรีเช็คหน้าตรวจสอบให้อัตโนมัติ
         </div>
       </Card>
       <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
-        {codes.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ — ทุกรหัสในรายการตรวจสอบตอนนี้มีสัญญาแล้ว</div>
+        {loadingDb ? <Loading t={t} /> : codes.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
             <thead><tr style={{ background: t.surfaceAlt }}>
@@ -1096,7 +1135,7 @@ function MissingContractList({ t, token, branchId, computed, onContractCreated }
             </tr></thead>
             <tbody>
               {codes.map((code) => (
-                <MissingContractRow key={code} t={t} token={token} branchId={branchId} code={code} onCreated={onContractCreated} />
+                <MissingContractRow key={code} t={t} token={token} branchId={branchId} code={code} onCreated={() => { loadDbCodes(); onContractCreated?.(); }} />
               ))}
             </tbody>
           </table>
