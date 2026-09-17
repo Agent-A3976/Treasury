@@ -119,6 +119,38 @@ const THEME = {
 };
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');`;
 
+function hexToRgba(hex, alpha) {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+// โหมด "กระจกฝ้า" — ตั้งค่าได้จากหน้าตั้งค่าบัญชี (ต่อเครื่อง เก็บใน localStorage เท่านั้น ไม่ผูกบัญชี)
+// แปลงสีพื้นทึบเดิมของธีมให้โปร่งแสง + เพิ่ม backdrop-blur ให้ Card/sidebar เห็นพื้นหลังไล่สีลอดผ่านมา
+// opacity ยิ่งน้อยยิ่งใส (เห็นพื้นหลังชัด) ยิ่งมากยิ่งทึบ (ใกล้เคียงธีมปกติ)
+// ปรับให้ใกล้เคียง "Liquid Glass" ของ iOS มากขึ้น — ไม่ได้แค่โปร่งแสง แต่เพิ่ม saturate() คู่กับ
+// blur() ให้สีที่ลอดผ่านมาสดขึ้น (จุดเด่นของวัสดุกระจกของ Apple) ขอบเป็นเส้นขาวจางๆ (เหมือนแสง
+// สะท้อนขอบกระจก) แทนเส้นขอบทึบปกติ และมุมโค้งกว่าเดิม
+function applyGlass(theme, opacity, mode) {
+  return {
+    ...theme,
+    surface: hexToRgba(theme.surface.startsWith("#") ? theme.surface : "#ffffff", opacity),
+    surfaceAlt: hexToRgba(theme.surfaceAlt.startsWith("#") ? theme.surfaceAlt : "#ffffff", Math.max(0.15, opacity - 0.15)),
+    sidebar: hexToRgba(theme.sidebar.startsWith("#") ? theme.sidebar : "#000000", Math.min(0.92, opacity + 0.15)),
+    // เส้นขอบต้องเข้มพอจะมองเห็นปุ่ม/ช่องกรอกได้แม้พื้นผิวโปร่งแสง ไม่ใช่แค่จางๆ สวยๆ อย่างเดียว —
+    // โหมดสว่างพื้นเป็นกระจกสีอ่อน ต้องใช้เส้นเข้ม / โหมดมืดพื้นเป็นกระจกสีเข้ม ต้องใช้เส้นสว่าง
+    border: mode === "dark" ? "rgba(255,255,255,0.32)" : "rgba(20,24,29,0.22)",
+    isGlass: true,
+  };
+}
+const GLASS_BLUR = "blur(22px) saturate(180%)";
+// ใช้แปะกับทุกกล่อง/ปุ่มที่วางลอยอยู่บนพื้นหลังไล่สีตรงๆ (ไม่ได้อยู่ใน Card) เช่น select/ปุ่มไอคอน
+// แถบบนสุด — ถ้าไม่ทำ ปุ่มพวกนี้จะโปร่งแสงแต่ไม่เบลอฉากหลัง มองไม่เห็นขอบเขตปุ่ม ("จมหาย" ไปกับพื้นหลัง)
+function glassSurfaceStyle(t) {
+  return t.isGlass ? { backdropFilter: GLASS_BLUR, WebkitBackdropFilter: GLASS_BLUR } : {};
+}
+const GLASS_BG_LIGHT = `radial-gradient(circle at 12% 18%, rgba(120,190,255,0.35), transparent 42%), radial-gradient(circle at 88% 15%, rgba(140,220,255,0.3), transparent 42%), radial-gradient(circle at 50% 92%, rgba(170,255,205,0.3), transparent 46%), linear-gradient(135deg, #eef3f8, #eef9f7)`;
+const GLASS_BG_DARK = `radial-gradient(circle at 12% 18%, rgba(60,110,180,0.35), transparent 42%), radial-gradient(circle at 88% 15%, rgba(50,140,170,0.3), transparent 42%), radial-gradient(circle at 50% 92%, rgba(60,150,120,0.28), transparent 46%), linear-gradient(135deg, #0b0f13, #0f1a1a)`;
+
 const NAV = [
   { key: "check", label: "ตรวจสอบ", icon: ClipboardCheck },
   { key: "dashboard", label: "Dashboard", icon: LayoutGrid },
@@ -404,7 +436,11 @@ function PageHeader({ t, title, sub }) {
   );
 }
 function Card({ t, children, style }) {
-  return <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: 18, boxShadow: t.shadow, ...style }}>{children}</div>;
+  const glass = t.isGlass ? {
+    backdropFilter: GLASS_BLUR, WebkitBackdropFilter: GLASS_BLUR, borderRadius: 20,
+    boxShadow: `${t.shadow}, inset 0 1px 0 rgba(255,255,255,0.35)`,
+  } : {};
+  return <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: 18, boxShadow: t.shadow, ...glass, ...style }}>{children}</div>;
 }
 function ErrBox({ t, msg }) {
   if (!msg) return null;
@@ -697,46 +733,147 @@ async function postPaymentRow(token, branchId, code, period, amount, isoDate, co
   return { ok: true, msg: `บันทึกแล้ว (contract_id ${contract.contract_id} งวด ${installment_number})` };
 }
 
+// เทียบแต่ละแถวที่วางมากับฐานข้อมูลจริงก่อนบันทึก — เดิมกดนำเข้าแล้วยิงเข้า DB ทันที ไม่มีขั้นตอน
+// เทียบก่อนเลย ถ้ามีของเดิมอยู่แล้ว (งวดเดียวกัน+วันเดียวกัน) แต่ยอด/ประเภทไม่ตรง จะขึ้นเป็น "conflict"
+// ให้เลือกกด "บันทึกทับ" เอง แทนที่จะแอบสร้างแถวซ้อนหรือปฏิเสธเงียบๆ — ตั้งใจเทียบแค่ (สัญญา+งวด+วันที่)
+// เดียวกันเท่านั้น ไม่ใช่ (สัญญา+งวด) เฉยๆ เพราะงวดเดียวกันจ่ายหลายครั้งคนละวันได้จริง (บางส่วน/ครบ)
+// ถือเป็นคนละรายการ ไม่ใช่ของซ้ำ/ผิดพลาด
+async function buildImportPreview(token, branchId, lines, cache) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = i + 1;
+    const parsed = parseImportLine(lines[i]);
+    if (!parsed) { out.push({ line, status: "parse_error", msg: "จำนวนคอลัมน์ไม่ครบ 6 ช่อง หรือรูปแบบไม่ถูกต้อง" }); continue; }
+    const p = parsePeriod(parsed.period);
+    if (!p || !p.fmtOK) { out.push({ line, status: "parse_error", code: parsed.code, period: parsed.period, msg: `งวดที่ "${parsed.period}" รูปแบบไม่ถูกต้อง` }); continue; }
+    const isoDate = toISODate(parsed.day, parsed.monthIdx, parsed.yearBE);
+    const installment_number = p.hasDash ? p.end : p.start;
+    const payment_type = p.status || null;
+    const base = { line, code: parsed.code, period: parsed.period, amount: parsed.amount, isoDate, installment_number, payment_type };
+
+    let contract = cache.get(parsed.code);
+    if (contract === undefined) {
+      contract = await fetchContractForCode(token, branchId, parsed.code);
+      cache.set(parsed.code, contract);
+    }
+    if (!contract) { out.push({ ...base, status: "no_contract" }); continue; }
+
+    const existing = await supabaseRest(
+      `payments?contract_id=eq.${contract.contract_id}&installment_number=eq.${installment_number}&payment_date=eq.${isoDate}&select=payment_id,amount,payment_date,payment_type&limit=5`,
+      { token }
+    );
+    if (!existing.length) { out.push({ ...base, status: "new" }); continue; }
+    const exact = existing.find((e) => Number(e.amount) === parsed.amount && (e.payment_type || null) === payment_type);
+    out.push(exact ? { ...base, status: "exact_dup" } : { ...base, status: "conflict", existing: existing[0] });
+  }
+  return out;
+}
+
+const IMPORT_STATUS_LABEL = {
+  new: "ใหม่ — พร้อมบันทึก", no_contract: "ไม่พบสัญญา — จะบันทึกรอตรวจสอบ", exact_dup: "ซ้ำเป๊ะกับของเดิมอยู่แล้ว",
+  conflict: "มีของเดิมอยู่ แต่ยอด/ประเภทไม่ตรงกัน", parse_error: "รูปแบบผิด — ข้ามแถวนี้", overwritten: "บันทึกทับของเดิมแล้ว",
+};
+
 function ImportPasteCard({ t, token, branchId }) {
   const [text, setText] = useState("");
-  const [results, setResults] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [comparing, setComparing] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [overwritingLine, setOverwritingLine] = useState(null);
+  const [committed, setCommitted] = useState(null);
   const input = mkInput(t);
 
-  async function doImport() {
-    setBusy(true); setResults(null);
+  async function doCompare() {
+    setComparing(true); setPreview(null); setCommitted(null);
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    const out = [];
-    const cache = new Map();
-    for (let i = 0; i < lines.length; i++) {
-      const parsed = parseImportLine(lines[i]);
-      if (!parsed) { out.push({ line: i + 1, ok: false, msg: "จำนวนคอลัมน์ไม่ครบ 6 ช่อง หรือรูปแบบไม่ถูกต้อง" }); continue; }
-      try {
-        const r = await postPaymentRow(token, branchId, parsed.code, parsed.period, parsed.amount, toISODate(parsed.day, parsed.monthIdx, parsed.yearBE), cache);
-        out.push({ line: i + 1, ...r });
-      } catch (e) { out.push({ line: i + 1, ok: false, msg: e.message }); }
-    }
-    setResults(out);
-    setBusy(false);
-    if (out.length && out.every((r) => r.ok)) setText("");
+    const out = await buildImportPreview(token, branchId, lines, new Map());
+    setPreview(out);
+    setComparing(false);
   }
+
+  async function commitPending() {
+    setCommitting(true); setCommitted(null);
+    const cache = new Map();
+    const targets = preview.filter((p) => p.status === "new" || p.status === "no_contract");
+    const out = [];
+    for (const item of targets) {
+      try {
+        const r = await postPaymentRow(token, branchId, item.code, item.period, item.amount, item.isoDate, cache);
+        out.push({ line: item.line, ...r });
+      } catch (e) { out.push({ line: item.line, ok: false, msg: e.message }); }
+    }
+    setCommitted(out);
+    setCommitting(false);
+    const succeededLines = new Set(out.filter((r) => r.ok).map((r) => r.line));
+    setPreview((prev) => prev.filter((p) => !succeededLines.has(p.line)));
+  }
+
+  async function overwrite(item) {
+    setOverwritingLine(item.line);
+    try {
+      await supabaseRest(`payments?payment_id=eq.${item.existing.payment_id}`, {
+        method: "PATCH", token, body: { amount: item.amount, payment_date: item.isoDate, payment_type: item.payment_type },
+      });
+      setPreview((prev) => prev.map((p) => (p.line === item.line ? { ...p, status: "overwritten" } : p)));
+    } catch (e) {
+      setPreview((prev) => prev.map((p) => (p.line === item.line ? { ...p, overwriteErr: e.message } : p)));
+    } finally {
+      setOverwritingLine(null);
+    }
+  }
+
+  const pendingCount = preview ? preview.filter((p) => p.status === "new" || p.status === "no_contract").length : 0;
 
   return (
     <Card t={t} style={{ marginBottom: 16 }}>
       <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>เพิ่มข้อมูลเอง (วางจาก Excel)</div>
-      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 12, lineHeight: 1.6 }}>แต่ละแถว: รหัสลูกค้า, งวดที่, จำนวนเงิน, วันที่, เดือน, พ.ศ. — คั่นด้วย Tab (ก็อปจาก Excel วางได้เลย) หนึ่งบรรทัดต่อหนึ่งแถว</div>
-      <textarea style={{ ...input, height: 130, resize: "vertical", fontFamily: "'IBM Plex Mono', monospace" }} value={text} onChange={(e) => setText(e.target.value)} placeholder={"9\t7\t2700\t20\tกรกฎาคม\t2568"} />
-      <button onClick={doImport} disabled={busy || !text.trim()} style={{ marginTop: 12, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: busy ? "default" : "pointer", fontFamily: "inherit", opacity: busy || !text.trim() ? 0.6 : 1 }}>
-        {busy ? "กำลังนำเข้า..." : "นำเข้าข้อมูล"}
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 12, lineHeight: 1.6 }}>แต่ละแถว: รหัสลูกค้า, งวดที่, จำนวนเงิน, วันที่, เดือน, พ.ศ. — คั่นด้วย Tab (ก็อปจาก Excel วางได้เลย) หนึ่งบรรทัดต่อหนึ่งแถว กด "เทียบข้อมูล" ก่อนเสมอ ระบบจะเช็คกับฐานข้อมูลจริงว่ามีของเดิม (งวด+วันที่เดียวกัน) อยู่แล้วไหมก่อนบันทึก</div>
+      <textarea style={{ ...input, height: 130, resize: "vertical", fontFamily: "'IBM Plex Mono', monospace" }} value={text} onChange={(e) => { setText(e.target.value); setPreview(null); setCommitted(null); }} placeholder={"9\t7\t2700\t20\tกรกฎาคม\t2568"} />
+      <button onClick={doCompare} disabled={comparing || !text.trim()} style={{ marginTop: 12, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: comparing ? "default" : "pointer", fontFamily: "inherit", opacity: comparing || !text.trim() ? 0.6 : 1 }}>
+        {comparing ? "กำลังเทียบข้อมูล..." : "เทียบข้อมูล"}
       </button>
-      {results && (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: results.every((r) => r.ok) ? t.ok : t.bad, marginBottom: 8 }}>
-            สำเร็จ {results.filter((r) => r.ok).length} / ล้มเหลว {results.filter((r) => !r.ok).length} จากทั้งหมด {results.length} แถว
-          </div>
-          <div style={{ maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-            {results.map((r, i) => (<div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>บรรทัด {r.line}: {r.msg}</div>))}
-          </div>
+
+      {preview && (
+        <div style={{ marginTop: 16 }}>
+          {preview.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: t.ink2 }}>ไม่มีแถวเหลือให้ดำเนินการแล้ว</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+              {preview.map((p) => (
+                <div key={p.line} style={{ background: t.surfaceAlt, borderRadius: 8, padding: "8px 12px", fontSize: 12.5 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <span>บรรทัด {p.line}{p.code ? ` — รหัส ${p.code} งวด ${p.period}${p.amount != null ? ` ${fmt(p.amount)} บาท` : ""}` : ""}</span>
+                    <span style={{ color: p.status === "conflict" || p.status === "parse_error" ? t.bad : p.status === "no_contract" ? t.warn : p.status === "exact_dup" ? t.ink3 : t.ok, fontWeight: 600 }}>
+                      {p.msg || IMPORT_STATUS_LABEL[p.status]}
+                    </span>
+                  </div>
+                  {p.status === "conflict" && (
+                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span style={{ color: t.ink2 }}>ของเดิม: {fmt(Number(p.existing.amount))} บาท{p.existing.payment_type ? ` (${p.existing.payment_type})` : ""}</span>
+                      <span style={{ color: t.ink2 }}>→ ใหม่: {fmt(p.amount)} บาท{p.payment_type ? ` (${p.payment_type})` : ""}</span>
+                      <button onClick={() => overwrite(p)} disabled={overwritingLine === p.line} style={{ background: t.bad, color: "#fff", border: "none", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: overwritingLine === p.line ? "default" : "pointer", fontFamily: "inherit", opacity: overwritingLine === p.line ? 0.6 : 1 }}>
+                        {overwritingLine === p.line ? "กำลังบันทึกทับ..." : "บันทึกทับของเดิม"}
+                      </button>
+                      {p.overwriteErr && <span style={{ color: t.bad }}>{p.overwriteErr}</span>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {pendingCount > 0 && (
+            <button onClick={commitPending} disabled={committing} style={{ marginTop: 14, background: t.ok, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: committing ? "default" : "pointer", fontFamily: "inherit", opacity: committing ? 0.6 : 1 }}>
+              {committing ? "กำลังบันทึก..." : `บันทึกรายการที่พร้อม (${pendingCount} แถว)`}
+            </button>
+          )}
+          {committed && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: committed.every((r) => r.ok) ? t.ok : t.bad, marginBottom: 6 }}>
+                บันทึกสำเร็จ {committed.filter((r) => r.ok).length} / ล้มเหลว {committed.filter((r) => !r.ok).length}
+              </div>
+              {committed.map((r, i) => (<div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>บรรทัด {r.line}: {r.msg}</div>))}
+            </div>
+          )}
         </div>
       )}
     </Card>
@@ -1769,7 +1906,40 @@ async function uploadAvatarFile(token, userId, file) {
   return `${SUPABASE_URL}/storage/v1/object/public/avatars/${path}?v=${Date.now()}`;
 }
 
-function AccountSettingsPage({ t, token, profile, onSaved }) {
+// รูปพื้นหลังกำหนดเอง — ใช้ bucket "avatars" เดียวกับรูปโปรไฟล์ (คนละไฟล์ในโฟลเดอร์ของตัวเอง)
+// จะได้ไม่ต้องสร้าง bucket/policy ใหม่ ลิงก์ผลลัพธ์เก็บไว้แค่ localStorage เครื่องนี้ (ไม่ผูกบัญชี)
+async function uploadBackgroundFile(token, userId, file) {
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `${userId}/background.${ext}`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/avatars/${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${token}`,
+      "x-upsert": "true",
+    },
+    body: file,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.error || "อัปโหลดรูปไม่สำเร็จ");
+  return `${SUPABASE_URL}/storage/v1/object/public/avatars/${path}?v=${Date.now()}`;
+}
+
+function AccountSettingsPage({ t, token, profile, onSaved, bgStyle, setBgStyle, glassOpacity, setGlassOpacity, bgImageUrl, setBgImageUrl }) {
+  const [bgUploading, setBgUploading] = useState(false);
+  const [bgErr, setBgErr] = useState("");
+
+  async function pickBgImage(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBgUploading(true); setBgErr("");
+    try {
+      const url = await uploadBackgroundFile(token, profile.user_id, f);
+      setBgImageUrl(url);
+    } catch (err) { setBgErr(err.message); }
+    finally { setBgUploading(false); e.target.value = ""; }
+  }
   const [nickname, setNickname] = useState(profile.nickname || "");
   const [phone, setPhone] = useState(profile.phone || "");
   const [contactEmail, setContactEmail] = useState(profile.contact_email || "");
@@ -1845,13 +2015,49 @@ function AccountSettingsPage({ t, token, profile, onSaved }) {
           </button>
         </form>
       </Card>
+
+      <Card t={t} style={{ maxWidth: 480, marginTop: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>รูปแบบพื้นหลัง</div>
+        <div style={{ fontSize: 12, color: t.ink2, marginBottom: 14, lineHeight: 1.6 }}>ตั้งค่าเฉพาะเครื่องนี้ (ไม่ผูกกับบัญชี เครื่อง/เบราว์เซอร์อื่นไม่ได้รับผลด้วย)</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button type="button" onClick={() => setBgStyle("normal")} style={{ background: bgStyle === "normal" ? t.accent : "transparent", color: bgStyle === "normal" ? t.accentInk : t.ink, border: `1px solid ${bgStyle === "normal" ? t.accent : t.border}`, borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>ปกติ</button>
+          <button type="button" onClick={() => setBgStyle("glass")} style={{ background: bgStyle === "glass" ? t.accent : "transparent", color: bgStyle === "glass" ? t.accentInk : t.ink, border: `1px solid ${bgStyle === "glass" ? t.accent : t.border}`, borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>กระจกฝ้า (Liquid Glass)</button>
+        </div>
+        {bgStyle === "glass" && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={mkLabel(t)}>ความทึบของพื้นผิว — {Math.round(glassOpacity * 100)}% (ค่าน้อย = ใสกว่า เห็นพื้นหลังชัดกว่า)</label>
+            <input type="range" min="20" max="90" step="5" value={Math.round(glassOpacity * 100)} onChange={(e) => setGlassOpacity(Number(e.target.value) / 100)} style={{ width: "100%" }} />
+          </div>
+        )}
+        <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 14 }}>
+          <label style={mkLabel(t)}>รูปพื้นหลังกำหนดเอง (ไม่บังคับ — ถ้าเลือกไว้จะใช้แทนพื้นหลังไล่สีเริ่มต้น)</label>
+          {bgImageUrl && (
+            <img src={bgImageUrl} alt="" style={{ width: "100%", maxWidth: 240, height: 100, objectFit: "cover", borderRadius: 8, marginBottom: 10, border: `1px solid ${t.border}` }} />
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <input type="file" accept="image/*" onChange={pickBgImage} disabled={bgUploading} style={{ fontSize: 12.5, color: t.ink2 }} />
+            {bgUploading && <span style={{ fontSize: 12, color: t.ink2 }}>กำลังอัปโหลด...</span>}
+            {bgImageUrl && !bgUploading && (
+              <button type="button" onClick={() => setBgImageUrl("")} style={{ background: "transparent", border: `1px solid ${t.border}`, color: t.bad, borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>ลบรูปพื้นหลัง</button>
+            )}
+          </div>
+          <ErrBox t={t} msg={bgErr} />
+        </div>
+      </Card>
     </div>
   );
 }
 
 function CheckPage() {
   const [mode, setMode] = useState("dark");
-  const t = THEME[mode];
+  // รูปแบบพื้นหลัง "กระจกฝ้า" — ตั้งได้จากหน้าตั้งค่าบัญชี เก็บแค่ localStorage ต่อเครื่อง ไม่ผูกบัญชี
+  const [bgStyle, setBgStyle] = useState(() => { try { return localStorage.getItem("bg_style") || "normal"; } catch { return "normal"; } });
+  const [glassOpacity, setGlassOpacity] = useState(() => { try { const v = parseFloat(localStorage.getItem("bg_glass_opacity")); return isNaN(v) ? 0.55 : v; } catch { return 0.55; } });
+  const [bgImageUrl, setBgImageUrl] = useState(() => { try { return localStorage.getItem("bg_image_url") || ""; } catch { return ""; } });
+  useEffect(() => { try { localStorage.setItem("bg_style", bgStyle); } catch {} }, [bgStyle]);
+  useEffect(() => { try { localStorage.setItem("bg_glass_opacity", String(glassOpacity)); } catch {} }, [glassOpacity]);
+  useEffect(() => { try { localStorage.setItem("bg_image_url", bgImageUrl || ""); } catch {} }, [bgImageUrl]);
+  const t = bgStyle === "glass" ? applyGlass(THEME[mode], glassOpacity, mode) : THEME[mode];
   const [active, setActive] = useState("check");
 
   // ---------- auth state ----------
@@ -1997,10 +2203,15 @@ function CheckPage() {
   }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: t.bg, color: t.ink, fontFamily: "'IBM Plex Sans Thai', sans-serif" }}>
+    <div style={{
+      display: "flex", minHeight: "100vh", color: t.ink, fontFamily: "'IBM Plex Sans Thai', sans-serif",
+      ...(bgImageUrl
+        ? { backgroundImage: `url(${bgImageUrl})`, backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed" }
+        : { background: t.isGlass ? (mode === "dark" ? GLASS_BG_DARK : GLASS_BG_LIGHT) : t.bg, backgroundAttachment: "fixed" }),
+    }}>
       <style>{FONT_IMPORT}</style>
 
-      <aside style={{ width: 220, background: t.sidebar, padding: "20px 14px", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+      <aside style={{ width: 220, background: t.sidebar, padding: "20px 14px", display: "flex", flexDirection: "column", flexShrink: 0, ...(t.isGlass ? { backdropFilter: GLASS_BLUR, WebkitBackdropFilter: GLASS_BLUR, borderRight: "1px solid rgba(255,255,255,0.25)" } : {}) }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "0 8px", marginBottom: 28 }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: t.accent, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Wallet size={15} color={mode === "dark" ? t.accentInk : "#fff"} />
@@ -2050,24 +2261,20 @@ function CheckPage() {
 
       <main style={{ flex: 1, padding: "22px 28px 60px", minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 22 }}>
-          <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
-            <Search size={14} style={{ position: "absolute", left: 12, top: 11, color: t.ink3 }} />
-            <input placeholder="ค้นหารหัสลูกค้า, งวด..." style={{ ...input, padding: "9px 12px 9px 34px", fontFamily: "inherit" }} />
-          </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{ position: "relative" }}>
-              <select value={branchId} onChange={(e) => setBranchId(e.target.value)} disabled={branchList.length === 0} style={{ appearance: "none", padding: "8px 30px 8px 12px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, color: t.ink, fontSize: 13, fontFamily: "inherit", cursor: branchList.length ? "pointer" : "default" }}>
+              <select value={branchId} onChange={(e) => setBranchId(e.target.value)} disabled={branchList.length === 0} style={{ appearance: "none", padding: "8px 30px 8px 12px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, color: t.ink, fontSize: 13, fontFamily: "inherit", cursor: branchList.length ? "pointer" : "default", ...glassSurfaceStyle(t) }}>
                 {branchList.length === 0
                   ? <option value="">ไม่มีสาขาที่เข้าถึงได้</option>
                   : branchList.map((b) => <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>)}
               </select>
               <ChevronDown size={14} style={{ position: "absolute", right: 10, top: 10, color: t.ink2, pointerEvents: "none" }} />
             </div>
-            <button style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink, position: "relative" }}>
+            <button style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink, position: "relative", ...glassSurfaceStyle(t) }}>
               <Bell size={15} />
               <span style={{ position: "absolute", top: 6, right: 7, width: 6, height: 6, borderRadius: 99, background: t.bad }} />
             </button>
-            <button onClick={() => setMode(mode === "dark" ? "light" : "dark")} aria-label="สลับโหมด" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink }}>
+            <button onClick={() => setMode(mode === "dark" ? "light" : "dark")} aria-label="สลับโหมด" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink, ...glassSurfaceStyle(t) }}>
               {mode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>
@@ -2083,7 +2290,7 @@ function CheckPage() {
           เชื่อมต่อฐานข้อมูลแล้ว · วันที่ {new Date().toLocaleDateString("th-TH", { day: "numeric", month: "long", year: "numeric" })}
         </div>
 
-        <form onSubmit={addRow} style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: 18, marginBottom: 20, boxShadow: t.shadow }}>
+        <form onSubmit={addRow} style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: 18, marginBottom: 20, boxShadow: t.shadow, ...glassSurfaceStyle(t) }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
             <Plus size={16} color={t.accent} />
             <span style={{ fontWeight: 600, fontSize: 14.5 }}>เพิ่มรายการรับชำระเงิน</span>
@@ -2133,7 +2340,7 @@ function CheckPage() {
           </div>
         </form>
 
-        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: "hidden", boxShadow: t.shadow }}>
+        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: "hidden", boxShadow: t.shadow, ...glassSurfaceStyle(t) }}>
           <div style={{ padding: "14px 18px", borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontWeight: 600, fontSize: 14.5 }}>รายการวันนี้</span>
             <span style={{ color: t.ink3, fontSize: 12.5, fontFamily: "'IBM Plex Mono', monospace" }}>{computed.length} แถว</span>
@@ -2188,7 +2395,7 @@ function CheckPage() {
         {active === "wr" && <WRPage t={t} token={session.access_token} branchId={branchId} computed={computed} onContractCreated={() => setRecheckTick((n) => n + 1)} />}
         {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={branchId} />}
         {active === "fix" && <FixPage t={t} token={session.access_token} branchId={branchId} />}
-        {active === "settings" && <AccountSettingsPage t={t} token={session.access_token} profile={profile} onSaved={(updated) => setProfile(updated)} />}
+        {active === "settings" && <AccountSettingsPage t={t} token={session.access_token} profile={profile} onSaved={(updated) => setProfile(updated)} bgStyle={bgStyle} setBgStyle={setBgStyle} glassOpacity={glassOpacity} setGlassOpacity={setGlassOpacity} bgImageUrl={bgImageUrl} setBgImageUrl={setBgImageUrl} />}
         {active === "admin" && (
           profile.is_admin
             ? <AdminPage t={t} token={session.access_token} />
