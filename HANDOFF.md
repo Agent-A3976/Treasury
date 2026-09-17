@@ -4,7 +4,7 @@
 - **Frontend**: React (ไฟล์ HTML เดี่ยว ไม่มี build step — โหลด React/ReactDOM/Babel standalone จาก CDN แล้วแปลง JSX ในเบราว์เซอร์ด้วย `Babel.transform(..., {presets:[["react",{runtime:"classic"}]]})` — **ห้ามใช้ preset แบบ default เพราะ Babel เวอร์ชันใหม่จะ auto-inject import statement ของ JSX runtime แล้วพัง**)
 - **Backend**: Supabase (Postgres + Auth + REST API ผ่าน PostgREST) — ไม่ใช้ `@supabase/supabase-js` (ไม่มีให้ใช้ในบาง environment) ยิง REST ตรงด้วย `fetch()` เอง
 - **Hosting ปัจจุบัน**: GitHub Pages, repo `Agent-A3976/Treasury` (ไฟล์เดิมของระบบเก่าอยู่ที่ `index.html` ในโฟลเดอร์เดียวกัน — **ห้ามทับไฟล์นี้**)
-- **ไฟล์ล่าสุด**: `payment_check_v15.html` (เวอร์ชันต่อ ๆ ไปให้นับเลขต่อ อย่าทับไฟล์เก่า จะได้ rollback ได้ถ้าพัง — รูปแบบ commit ของ repo นี้คือ "rename vN เป็น vN+1" ทับของเก่าออกจาก repo ทุกครั้ง ไม่ใช่เก็บทุกเวอร์ชันไว้)
+- **ไฟล์ล่าสุด**: `payment_check_v16.html` (เวอร์ชันต่อ ๆ ไปให้นับเลขต่อ อย่าทับไฟล์เก่า จะได้ rollback ได้ถ้าพัง — รูปแบบ commit ของ repo นี้คือ "rename vN เป็น vN+1" ทับของเก่าออกจาก repo ทุกครั้ง ไม่ใช่เก็บทุกเวอร์ชันไว้)
 
 ## Supabase
 - Project URL: `https://cymyqbmurimvceddcvwr.supabase.co`
@@ -17,7 +17,7 @@
 - `user_branches` (user_id, branch_id) — กำหนดว่า user เข้าสาขาไหนได้
 - `contracts` (contract_id BIGINT PK, device_code, branch_id, start_date, total_installments, amount_per_installment, status: active/returned/closed) — **มี partial unique index บังคับว่ารหัสเดียวกัน+สาขาเดียวกัน status='active' ได้แค่ 1 แถวเท่านั้น** (กันบั๊กสัญญาซ้อนที่เจอในข้อมูลเก่า)
 - `payments` (payment_id PK, contract_id nullable, **device_code nullable** — เพิ่มมาพร้อม v15, populate ให้ทุกแถวที่ insert ใหม่ผ่านแอปแล้ว (ทั้งจับคู่ได้และไม่ได้), แถวเก่าก่อน v15 เป็น NULL หมด เพราะกู้คืนไม่ได้ — installment_number, payment_type, amount, fee, cumulative, slip_amount, payment_date, recorded_by, needs_review, review_reason, possible_duplicate)
-- Storage bucket `avatars` (public read) — เก็บรูปโปรไฟล์ที่ path `avatars/<user_id>/avatar.<ext>`
+- Storage bucket `avatars` (public read) — เก็บรูปโปรไฟล์ที่ path `avatars/<user_id>/avatar.<ext>` และตั้งแต่ v16 ใช้เก็บรูปพื้นหลังกำหนดเองด้วยที่ `avatars/<user_id>/background.<ext>` (bucket/policy เดิม ไม่ต้องสร้างใหม่)
 
 ### RLS
 - ทุกตารางเปิด RLS แล้ว — เข้าถึงได้เฉพาะ `authenticated` role ที่ `is_active=true`
@@ -37,8 +37,9 @@
 4. **Archive** — ดูสัญญาที่ปิดแล้ว อย่างเดียว (ยังแก้ไข/ย้ายอะไรไม่ได้)
 5. **ตรวจ+ซ่อมงวด** — ค้นหาสัญญา ดู "แผนผังงวด" (กริดสีเขียว/เหลือง/เทา บอกว่าจ่ายถึงงวดไหน ขาดงวดไหน) + ประวัติเต็ม — ยังดูได้อย่างเดียว แก้ไขไม่ได้
 6. **Admin** — อนุมัติบัญชีใหม่, toggle is_admin/is_active, มอบหมายสาขา — **ยังไม่กันเหลือแอดมิน 0 คน ไม่กันปิดสิทธิ์ตัวเอง ไม่มีปุ่มรีเซ็ตรหัสผ่านให้คนอื่น**
-7. **ตั้งค่าบัญชี (self-service)** — ทุกคนแก้ nickname/เบอร์โทร/อีเมลติดต่อ/รูปโปรไฟล์ของตัวเองได้ (รูปอัปโหลดไฟล์จริงขึ้น Supabase Storage bucket `avatars`) — อีเมลติดต่อเป็นแค่ข้อมูลติดต่อ **ไม่ใช่อีเมลล็อกอินจริง** (เปลี่ยนอีเมลล็อกอินยังไม่รองรับ)
+7. **ตั้งค่าบัญชี (self-service)** — ทุกคนแก้ nickname/เบอร์โทร/อีเมลติดต่อ/รูปโปรไฟล์ของตัวเองได้ (รูปอัปโหลดไฟล์จริงขึ้น Supabase Storage bucket `avatars`) — อีเมลติดต่อเป็นแค่ข้อมูลติดต่อ **ไม่ใช่อีเมลล็อกอินจริง** (เปลี่ยนอีเมลล็อกอินยังไม่รองรับ) + **v16**: เพิ่ม "รูปแบบพื้นหลัง" — สลับ ปกติ/กระจกฝ้า (Liquid Glass, `applyGlass()` + `backdropFilter` blur+saturate), ปรับความทึบด้วย slider, อัปโหลดรูปพื้นหลังเอง — **ทุกอย่างในหัวข้อนี้เก็บแค่ localStorage เครื่องนั้น ไม่ผูกบัญชี/ไม่ sync ข้ามเครื่อง** (ตั้งใจแบบนี้ตามที่ตกลงกัน)
 8. **Branch switcher หลัก** (dropdown มุมขวาบนของทุกหน้า) — ดึงรายชื่อสาขาจาก `branches` table จริงแล้ว (เดิม hardcode `surat/samui/langsuan` ทำให้สาขาใหม่ใช้งานไม่ได้และมี "samui"/"langsuan" ที่ไม่มีอยู่จริงปนอยู่ — แก้แล้ว) แอดมินเห็นทุกสาขา active, พนักงานเห็นเฉพาะสาขาที่ถูกมอบหมายผ่าน `user_branches`
+9. **นำเข้าข้อมูล (วางจาก Excel)** — v16 เปลี่ยนจาก "กดแล้วยิงเข้า DB ทันที" เป็น 2 ขั้นตอน: "เทียบข้อมูล" ก่อน (เช็คกับ DB จริงว่ามีของเดิมที่ contract+installment+วันที่เดียวกันไหม) แล้วค่อย "บันทึกรายการที่พร้อม" (แถวใหม่/ไม่พบสัญญา) — ถ้าเจอของเดิมแต่ยอด/ประเภทไม่ตรง (`conflict`) มีปุ่ม "บันทึกทับของเดิม" ทีละแถว แทนที่จะสร้างแถวซ้อนหรือถูกปฏิเสธเงียบๆ (ดู `buildImportPreview`)
 
 ## บั๊กที่เจอและแก้ไปแล้วระหว่างทำรอบนี้ (คุ้มค่าจำไว้)
 - **`supabaseRest` ไม่ส่ง `Prefer` header ตอน PATCH** — ทำให้ Supabase ตอบ 204 (body ว่าง) แล้ว `res.json()` throw ก่อนเช็ค `res.ok` ด้วยซ้ำ กระทบทุกปุ่มที่ใช้ PATCH ในระบบ (toggle is_admin/is_active ในหน้า Admin, ย้ายลูกค้าคืนเครื่อง, บันทึกตั้งค่าบัญชี) เข้าใจว่าพังแบบเงียบๆ มานานแล้วก่อนหน้านี้ — แก้โดยเพิ่ม `Prefer: return=representation` ให้ PATCH ด้วย และเปลี่ยนมาอ่าน response เป็น text ก่อนค่อย parse JSON เผื่อ body ว่าง
