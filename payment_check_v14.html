@@ -349,7 +349,7 @@ const TONE_DOT = { ok: "●", warn: "●", bad: "●", info: "●", neutral: "�
 
 // ตรวจทีละแถวตามลำดับ (ไม่ขนาน) เพราะการเช็ค "ซ้ำในรายการตรวจ" ต้องรู้ผลของแถวก่อนหน้า
 // ก่อนเสมอ — cache ผลค้นหาสัญญา+ประวัติต่อรหัสไว้ใน session เดียวกัน ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว
-function useComputedRows(rows, token, branchId, checkDate) {
+function useComputedRows(rows, token, branchId, checkDate, recheckTick) {
   const [results, setResults] = useState({});
   const contractCache = useRef(new Map());
 
@@ -371,7 +371,7 @@ function useComputedRows(rows, token, branchId, checkDate) {
     })();
     return () => { cancelled = true; };
 
-  }, [rows, token, branchId, checkDate]);
+  }, [rows, token, branchId, checkDate, recheckTick]);
 
   return rows.map((r) => ({ ...r, result: results[r.id] || { status: "", tone: "neutral" } }));
 }
@@ -923,7 +923,190 @@ function CloseContractCard({ t, token, branchId }) {
   );
 }
 
-function WRPage({ t, token, branchId, computed }) {
+// สร้างสัญญาใหม่ + แปล error จาก DB (unique constraint) ให้เป็นข้อความอ่านรู้เรื่อง — ใช้ร่วมกันทั้ง
+// แบบฟอร์มพิมพ์รหัสเอง (NewContractCard) และแบบกดจากลิสต์ "ลูกค้าที่ยังไม่มีสัญญา" (MissingContractRow)
+async function createContract(token, body) {
+  try {
+    const [created] = await supabaseRest(`contracts`, { method: "POST", token, body });
+    return { ok: true, contract: created };
+  } catch (e) {
+    const msg = e.message || "";
+    if (msg.includes("idx_one_active_contract_per_device")) {
+      return { ok: false, msg: "รหัสนี้มีสัญญาที่กำลังผ่อนอยู่แล้วในสาขานี้ — ต้องย้ายสัญญาเดิมเป็นผ่อนจบ/คืนเครื่องก่อน ถึงจะเปิดสัญญาใหม่รหัสเดียวกันได้" };
+    }
+    if (msg.includes("duplicate key") || msg.includes("already exists")) {
+      return { ok: false, msg: "มีสัญญารหัสนี้ + วันที่เริ่มนี้อยู่แล้วในสาขานี้" };
+    }
+    return { ok: false, msg: msg || "บันทึกไม่สำเร็จ" };
+  }
+}
+
+// เพิ่มสัญญาใหม่ — จุดแรกที่สร้างแถว contracts ผ่าน UI ได้ (เดิมต้องรัน SQL มือ) ตัว DB เองมี
+// partial unique index บังคับอยู่แล้วว่ารหัส+สาขาเดียวกัน active ซ้อนกันไม่ได้ เลยไม่ต้องเขียน
+// logic เช็คซ้ำเองในนี้ แค่ดัก error จาก DB มาแปลเป็นข้อความที่อ่านรู้เรื่อง
+function NewContractCard({ t, token, branchId, onCreated }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [code, setCode] = useState("");
+  const [startDate, setStartDate] = useState(today);
+  const [totalInstallments, setTotalInstallments] = useState("");
+  const [amountPerInstallment, setAmountPerInstallment] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(null);
+  const input = mkInput(t), label = mkLabel(t);
+
+  async function save(e) {
+    e.preventDefault();
+    setSaving(true); setErr(""); setDone(null);
+    const r = await createContract(token, {
+      device_code: code.trim(),
+      branch_id: branchId,
+      start_date: startDate,
+      total_installments: parseInt(totalInstallments, 10),
+      amount_per_installment: parseFloat(amountPerInstallment),
+    });
+    setSaving(false);
+    if (!r.ok) { setErr(r.msg); return; }
+    setDone(r.contract);
+    setCode(""); setTotalInstallments(""); setAmountPerInstallment("");
+    onCreated?.();
+  }
+
+  return (
+    <Card t={t} style={{ maxWidth: 480 }}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>เพิ่มสัญญาใหม่</div>
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 14, lineHeight: 1.6 }}>สร้างสัญญาผ่อนใหม่สำหรับรหัสลูกค้าในสาขาที่เลือกอยู่ตอนนี้ (ระบบจะกันไม่ให้รหัสเดียวกันมีสัญญา "ผ่อนอยู่" ซ้อนกัน 2 สัญญาให้อัตโนมัติ)</div>
+      <form onSubmit={save}>
+        <label style={label}>รหัสลูกค้า</label>
+        <input style={{ ...input, marginBottom: 14 }} value={code} onChange={(e) => setCode(e.target.value)} placeholder="เช่น 10128" required />
+        <label style={label}>วันที่เริ่มสัญญา</label>
+        <input type="date" style={{ ...input, marginBottom: 14 }} value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+        <label style={label}>จำนวนงวดทั้งหมด</label>
+        <input type="number" min="1" style={{ ...input, marginBottom: 14 }} value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} placeholder="เช่น 12" required />
+        <label style={label}>ยอดต่องวด (บาท)</label>
+        <input type="number" min="0" step="0.01" style={{ ...input, marginBottom: 14 }} value={amountPerInstallment} onChange={(e) => setAmountPerInstallment(e.target.value)} placeholder="เช่น 2190" required />
+        <ErrBox t={t} msg={err} />
+        {done && (
+          <div style={{ background: t.okSoft, color: t.ok, borderRadius: 8, padding: "10px 12px", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>
+            สร้างสัญญาแล้ว — contract_id {done.contract_id} รหัส {done.device_code}
+          </div>
+        )}
+        <button type="submit" disabled={saving} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: saving ? "default" : "pointer", fontFamily: "inherit", opacity: saving ? 0.6 : 1 }}>
+          {saving ? "กำลังบันทึก..." : "สร้างสัญญา"}
+        </button>
+      </form>
+    </Card>
+  );
+}
+
+// แถวเดี่ยวในลิสต์ "ลูกค้าที่ยังไม่มีสัญญา" — กด "เพิ่มสัญญา" แล้วกรอกแค่ 3 ช่องที่เหลือ (รหัสรู้อยู่แล้ว
+// จากรายการตรวจสอบ ไม่ต้องพิมพ์ซ้ำ)
+function MissingContractRow({ t, token, branchId, code, onCreated }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [open, setOpen] = useState(false);
+  const [startDate, setStartDate] = useState(today);
+  const [totalInstallments, setTotalInstallments] = useState("");
+  const [amountPerInstallment, setAmountPerInstallment] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const input = mkInput(t), label = mkLabel(t);
+
+  async function save(e) {
+    e.preventDefault();
+    setSaving(true); setErr("");
+    const r = await createContract(token, {
+      device_code: code,
+      branch_id: branchId,
+      start_date: startDate,
+      total_installments: parseInt(totalInstallments, 10),
+      amount_per_installment: parseFloat(amountPerInstallment),
+    });
+    setSaving(false);
+    if (!r.ok) { setErr(r.msg); return; }
+    setOpen(false);
+    onCreated?.();
+  }
+
+  return (
+    <>
+      <tr style={{ borderTop: `1px solid ${t.border}` }}>
+        <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{code}</td>
+        <td style={{ padding: "9px 14px" }}>
+          <button onClick={() => setOpen((o) => !o)} style={{ background: open ? "transparent" : t.accent, color: open ? t.ink2 : t.accentInk, border: open ? `1px solid ${t.border}` : "none", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            {open ? "ยกเลิก" : "เพิ่มสัญญา"}
+          </button>
+        </td>
+      </tr>
+      {open && (
+        <tr style={{ borderTop: `1px solid ${t.border}` }}>
+          <td colSpan={2} style={{ padding: 14, background: t.surfaceAlt }}>
+            <form onSubmit={save} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <label style={label}>วันที่เริ่มสัญญา</label>
+                <input type="date" style={{ ...input, width: 160 }} value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+              </div>
+              <div>
+                <label style={label}>จำนวนงวดทั้งหมด</label>
+                <input type="number" min="1" style={{ ...input, width: 120 }} value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} placeholder="เช่น 12" required />
+              </div>
+              <div>
+                <label style={label}>ยอดต่องวด (บาท)</label>
+                <input type="number" min="0" step="0.01" style={{ ...input, width: 140 }} value={amountPerInstallment} onChange={(e) => setAmountPerInstallment(e.target.value)} placeholder="เช่น 2190" required />
+              </div>
+              <button type="submit" disabled={saving} style={{ background: t.ok, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: saving ? "default" : "pointer", fontFamily: "inherit", opacity: saving ? 0.6 : 1, height: 38 }}>
+                {saving ? "กำลังบันทึก..." : "บันทึกสัญญา"}
+              </button>
+            </form>
+            <ErrBox t={t} msg={err} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// ลูกค้าที่ยังไม่มีสัญญา — ดึงจากรายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ (computed prop
+// เดียวกับที่หน้าตรวจสอบใช้) กรองเอาเฉพาะรหัสที่ผลออกมาเป็น "ไม่พบข้อมูลลูกค้า" — รหัสเป็นข้อความจริง
+// ที่พิมพ์วันนี้ (ต่างจากประวัติเก่าที่ไม่มีคอลัมน์เก็บรหัสไว้เลย เลยทำแบบนี้กับข้อมูลเก่าไม่ได้)
+function MissingContractList({ t, token, branchId, computed, onContractCreated }) {
+  const codes = useMemo(() => {
+    const set = new Set();
+    computed.forEach((r) => {
+      if (r.result?.status === "ไม่พบข้อมูลลูกค้า" && r.code && r.code.trim()) set.add(r.code.trim());
+    });
+    return Array.from(set);
+  }, [computed]);
+
+  return (
+    <div>
+      <Card t={t} style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>ลูกค้าที่ยังไม่มีสัญญา{codes.length > 0 && ` (${codes.length})`}</div>
+        <div style={{ fontSize: 12, color: t.ink2, lineHeight: 1.6 }}>
+          รวมรหัสลูกค้าจากรายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ ที่ระบบหาสัญญาในสาขาที่เลือกไม่เจอ — กด "เพิ่มสัญญา" แล้วกรอกแค่วันที่เริ่ม/จำนวนงวด/ยอดต่องวด รายการตรวจสอบจะรีเช็คให้อัตโนมัติหลังบันทึกเสร็จ
+        </div>
+      </Card>
+      <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
+        {codes.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ — ทุกรหัสในรายการตรวจสอบตอนนี้มีสัญญาแล้ว</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+            <thead><tr style={{ background: t.surfaceAlt }}>
+              <th style={{ textAlign: "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>รหัสลูกค้า</th>
+              <th style={{ padding: "9px 14px" }}></th>
+            </tr></thead>
+            <tbody>
+              {codes.map((code) => (
+                <MissingContractRow key={code} t={t} token={token} branchId={branchId} code={code} onCreated={onContractCreated} />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function WRPage({ t, token, branchId, computed, onContractCreated }) {
   const [tab, setTab] = useState("search");
   const [mode, setMode] = useState("date"); // 'date' หรือ 'code'
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -969,7 +1152,9 @@ function WRPage({ t, token, branchId, computed }) {
       <div style={{ display: "inline-flex", gap: 4, background: t.surfaceAlt, borderRadius: 11, padding: 4, marginBottom: 20 }}>
         {tabBtn("search", "ค้นหา/ดูข้อมูล")}
         {tabBtn("import", "นำเข้าข้อมูล")}
+        {tabBtn("newcontract", "เพิ่มสัญญาใหม่")}
         {tabBtn("close", "ย้ายลูกค้าคืนเครื่อง")}
+        {tabBtn("review", "ลูกค้าที่ยังไม่มีสัญญา")}
       </div>
 
       {tab === "search" && (
@@ -1026,7 +1211,9 @@ function WRPage({ t, token, branchId, computed }) {
         </>
       )}
 
+      {tab === "newcontract" && <NewContractCard t={t} token={token} branchId={branchId} onCreated={onContractCreated} />}
       {tab === "close" && <CloseContractCard t={t} token={token} branchId={branchId} />}
+      {tab === "review" && <MissingContractList t={t} token={token} branchId={branchId} computed={computed} onContractCreated={onContractCreated} />}
     </div>
   );
 }
@@ -1700,7 +1887,8 @@ function CheckPage() {
     return () => { cancelled = true; };
   }, [session, profile]);
 
-  const computed = useComputedRows(rows, session?.access_token, branchId, checkDate);
+  const [recheckTick, setRecheckTick] = useState(0);
+  const computed = useComputedRows(rows, session?.access_token, branchId, checkDate, recheckTick);
   const filtered = computed.filter((r) => {
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
@@ -1958,7 +2146,7 @@ function CheckPage() {
         )}
 
         {active === "dashboard" && <DashboardPage t={t} computed={computed} />}
-        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={branchId} computed={computed} />}
+        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={branchId} computed={computed} onContractCreated={() => setRecheckTick((n) => n + 1)} />}
         {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={branchId} />}
         {active === "fix" && <FixPage t={t} token={session.access_token} branchId={branchId} />}
         {active === "settings" && <AccountSettingsPage t={t} token={session.access_token} profile={profile} onSaved={(updated) => setProfile(updated)} />}
