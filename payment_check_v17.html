@@ -1153,131 +1153,242 @@ function NewContractCard({ t, token, branchId, onCreated }) {
   );
 }
 
-// แถวเดี่ยวในลิสต์ "ลูกค้าที่ยังไม่มีสัญญา" — กด "เพิ่มสัญญา" แล้วกรอกแค่ 3 ช่องที่เหลือ (รหัสรู้อยู่แล้ว
-// จากรายการตรวจสอบ ไม่ต้องพิมพ์ซ้ำ)
-function MissingContractRow({ t, token, branchId, code, onCreated }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [open, setOpen] = useState(false);
-  const [startDate, setStartDate] = useState(today);
-  const [totalInstallments, setTotalInstallments] = useState("");
-  const [amountPerInstallment, setAmountPerInstallment] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-  const input = mkInput(t), label = mkLabel(t);
-
-  async function save(e) {
-    e.preventDefault();
-    setSaving(true); setErr("");
-    const r = await createContract(token, {
-      device_code: code,
-      branch_id: branchId,
-      start_date: startDate,
-      total_installments: parseInt(totalInstallments, 10),
-      amount_per_installment: parseFloat(amountPerInstallment),
-    });
-    if (!r.ok) { setSaving(false); setErr(r.msg); return; }
-    // จับคู่แถวรอตรวจสอบ (contract_id ว่าง) ของรหัสนี้ที่ค้างอยู่ใน DB เข้ากับสัญญาที่เพิ่งสร้างให้อัตโนมัติ
-    // หมายเหตุ: จับคู่ด้วยรหัสล้วนๆ เพราะ payments ไม่มีคอลัมน์สาขา ถ้ารหัสซ้ำกันข้ามสาขาอาจจับผิดสาขาได้
-    // (กรณีน้อยมาก แก้ทีหลังผ่าน "ตรวจ+ซ่อมงวด" ได้ถ้าเจอ)
-    try {
-      await supabaseRest(`payments?contract_id=is.null&device_code=eq.${encodeURIComponent(code)}`, {
-        method: "PATCH", token, body: { contract_id: r.contract.contract_id, needs_review: false },
-      });
-    } catch { /* สัญญาสร้างสำเร็จแล้ว จับคู่ payment เก่าไม่สำเร็จก็ไม่ควรบล็อกผู้ใช้ ปล่อยให้ไปแก้ทีหลังได้ */ }
-    setSaving(false);
-    setOpen(false);
-    onCreated?.();
+// หายอดที่จ่ายบ่อยที่สุดในประวัติ ใช้เป็น "ยอดจริงจากประวัติ" เทียบกับยอดที่พิมพ์มา (ทนทานกว่าใช้
+// แถวแรก/แถวสุดท้ายเฉยๆ เพราะบางแถวอาจเป็นยอดบางส่วน/ส่วนลดที่ไม่ใช่ยอดปกติของงวด)
+function mostCommonAmount(history) {
+  const counts = new Map();
+  for (const h of history) {
+    const key = Number(h.amount);
+    counts.set(key, (counts.get(key) || 0) + 1);
   }
-
-  return (
-    <>
-      <tr style={{ borderTop: `1px solid ${t.border}` }}>
-        <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{code}</td>
-        <td style={{ padding: "9px 14px" }}>
-          <button onClick={() => setOpen((o) => !o)} style={{ background: open ? "transparent" : t.accent, color: open ? t.ink2 : t.accentInk, border: open ? `1px solid ${t.border}` : "none", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {open ? "ยกเลิก" : "เพิ่มสัญญา"}
-          </button>
-        </td>
-      </tr>
-      {open && (
-        <tr style={{ borderTop: `1px solid ${t.border}` }}>
-          <td colSpan={2} style={{ padding: 14, background: t.surfaceAlt }}>
-            <form onSubmit={save} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-              <div>
-                <label style={label}>วันที่เริ่มสัญญา</label>
-                <input type="date" style={{ ...input, width: 160 }} value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
-              </div>
-              <div>
-                <label style={label}>จำนวนงวดทั้งหมด</label>
-                <input type="number" min="1" style={{ ...input, width: 120 }} value={totalInstallments} onChange={(e) => setTotalInstallments(e.target.value)} placeholder="เช่น 12" required />
-              </div>
-              <div>
-                <label style={label}>ยอดต่องวด (บาท)</label>
-                <input type="number" min="0" step="0.01" style={{ ...input, width: 140 }} value={amountPerInstallment} onChange={(e) => setAmountPerInstallment(e.target.value)} placeholder="เช่น 2190" required />
-              </div>
-              <button type="submit" disabled={saving} style={{ background: t.ok, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: saving ? "default" : "pointer", fontFamily: "inherit", opacity: saving ? 0.6 : 1, height: 38 }}>
-                {saving ? "กำลังบันทึก..." : "บันทึกสัญญา"}
-              </button>
-            </form>
-            <ErrBox t={t} msg={err} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
+  let best = null, bestCount = 0;
+  for (const [amt, c] of counts) { if (c > bestCount) { best = amt; bestCount = c; } }
+  return best;
 }
 
-// ลูกค้าที่ยังไม่มีสัญญา — รวม 2 แหล่ง: (1) รายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ (computed
-// prop) ที่ผลออกมาเป็น "ไม่พบข้อมูลลูกค้า" กับ (2) payments ที่บันทึกไว้จริงใน DB ตอนนำเข้าข้อมูลแล้ว
-// หาสัญญาไม่เจอ (contract_id ว่าง, needs_review=true, มี device_code เก็บไว้แล้วตั้งแต่ v15 เป็นต้นไป)
-// แหล่งที่ 2 เห็นเหมือนกันทุกคนที่ login ไม่ผูกกับเครื่อง/เบราว์เซอร์เหมือนแหล่งที่ 1
-function MissingContractList({ t, token, branchId, computed, onContractCreated }) {
-  const [dbCodes, setDbCodes] = useState([]);
-  const [loadingDb, setLoadingDb] = useState(true);
+function parseBackfillLine(line) {
+  let parts = line.split("\t");
+  if (parts.length < 3) parts = line.split(",");
+  if (parts.length < 3) parts = line.trim().split(/\s+/);
+  parts = parts.map((s) => s.trim());
+  if (parts.length < 3) return null;
+  const [code, totalStr, amountStr] = parts;
+  const total_installments = parseInt(totalStr, 10);
+  const amount_per_installment = parseFloat(String(amountStr).replace(/,/g, ""));
+  if (!code || isNaN(total_installments) || isNaN(amount_per_installment)) return null;
+  return { code, total_installments, amount_per_installment };
+}
 
-  async function loadDbCodes() {
-    setLoadingDb(true);
+/* ============================================================================
+ * ข้อมูลสัญญา — เครื่องมือย้อนกรอกข้อมูลสัญญา (contracts) ให้รหัสที่มีประวัติจ่ายจริงอยู่แล้ว
+ * (payments รอตรวจสอบ) แต่ไม่เคยมีข้อมูลสัญญาเลย ย้ายมาจากฟีเจอร์เดียวกันในระบบเดิม — สแกนหารายชื่อ
+ * ให้ก่อน แล้วพิมพ์/วางจำนวนงวด+ยอดต่องวดมาเทียบกับประวัติจริงทีละชุด ก่อนค่อยยืนยันสร้างสัญญาจริง
+ * ==========================================================================*/
+function ContractBackfillDiscovery({ t, token, refreshKey, onPick }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true);
     try {
-      const rows = await supabaseRest(`payments?contract_id=is.null&needs_review=eq.true&device_code=not.is.null&select=device_code&limit=500`, { token });
-      setDbCodes(Array.from(new Set(rows.map((r) => r.device_code).filter(Boolean))));
-    } catch { setDbCodes([]); }
-    finally { setLoadingDb(false); }
+      const [orphans, contracts] = await Promise.all([
+        supabaseRest(`payments?contract_id=is.null&device_code=not.is.null&select=device_code&limit=5000`, { token }),
+        supabaseRest(`contracts?select=device_code`, { token }),
+      ]);
+      const hasContract = new Set(contracts.map((c) => c.device_code));
+      const counts = new Map();
+      orphans.forEach((r) => {
+        if (hasContract.has(r.device_code)) return;
+        counts.set(r.device_code, (counts.get(r.device_code) || 0) + 1);
+      });
+      setRows(Array.from(counts, ([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count));
+    } catch { setRows([]); }
+    finally { setLoading(false); }
   }
-  useEffect(() => { if (token) loadDbCodes(); }, [token]);
-
-  const codes = useMemo(() => {
-    const set = new Set(dbCodes);
-    computed.forEach((r) => {
-      if (r.result?.status === "ไม่พบข้อมูลลูกค้า" && r.code && r.code.trim()) set.add(r.code.trim());
-    });
-    return Array.from(set);
-  }, [computed, dbCodes]);
+  useEffect(() => { if (token) load(); }, [token, refreshKey]);
 
   return (
-    <div>
-      <Card t={t} style={{ marginBottom: 16 }}>
-        <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>ลูกค้าที่ยังไม่มีสัญญา{!loadingDb && codes.length > 0 && ` (${codes.length})`}</div>
-        <div style={{ fontSize: 12, color: t.ink2, lineHeight: 1.6 }}>
-          รวมรหัสลูกค้าจาก 2 แหล่ง: รายการที่กำลังตรวจสอบอยู่ในหน้า "ตรวจสอบ" ตอนนี้ + รายการที่บันทึกไว้ในฐานข้อมูลตอนนำเข้าข้อมูลแล้วหาสัญญาไม่เจอ (เห็นเหมือนกันทุกคน) — กด "เพิ่มสัญญา" แล้วกรอกแค่วันที่เริ่ม/จำนวนงวด/ยอดต่องวด ระบบจะจับคู่รายการที่ค้างไว้เข้ากับสัญญาใหม่และรีเช็คหน้าตรวจสอบให้อัตโนมัติ
+    <Card t={t} style={{ marginBottom: 16, padding: 0, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: 18, paddingBottom: 12 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>ลูกค้าที่ยังไม่มีข้อมูลสัญญา{!loading && ` (${rows.length})`}</div>
+          <div style={{ fontSize: 12, color: t.ink2, lineHeight: 1.6 }}>เทียบรหัสลูกค้าทั้งหมดใน Working Reference กับข้อมูลสัญญาที่เคยบันทึกไว้ — รหัสไหนมีประวัติผ่อนจริงแต่ยังไม่เคยบันทึกข้อมูลสัญญาเลย จะขึ้นในรายการนี้ (เรียงจากลูกค้าที่มีประวัติเยอะสุดก่อน)</div>
         </div>
-      </Card>
-      <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
-        {loadingDb ? <Loading t={t} /> : codes.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
-        ) : (
+        <button onClick={load} disabled={loading} style={{ background: "transparent", border: `1px solid ${t.border}`, color: t.ink2, borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", flexShrink: 0, whiteSpace: "nowrap" }}>↻ ตรวจสอบอีกครั้ง</button>
+      </div>
+      {loading ? <Loading t={t} /> : rows.length === 0 ? (
+        <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
+      ) : (
+        <div style={{ maxHeight: 280, overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
             <thead><tr style={{ background: t.surfaceAlt }}>
               <th style={{ textAlign: "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>รหัสลูกค้า</th>
+              <th style={{ textAlign: "right", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>จำนวนแถวประวัติ</th>
               <th style={{ padding: "9px 14px" }}></th>
             </tr></thead>
             <tbody>
-              {codes.map((code) => (
-                <MissingContractRow key={code} t={t} token={token} branchId={branchId} code={code} onCreated={() => { loadDbCodes(); onContractCreated?.(); }} />
+              {rows.map((r) => (
+                <tr key={r.code} style={{ borderTop: `1px solid ${t.border}` }}>
+                  <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.code}</td>
+                  <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.count}</td>
+                  <td style={{ padding: "9px 14px", textAlign: "right" }}>
+                    <button onClick={() => onPick(r.code)} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>+ กรอกสัญญา</button>
+                  </td>
+                </tr>
               ))}
             </tbody>
           </table>
-        )}
-      </Card>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+const BACKFILL_STATUS_LABEL = {
+  match: "ยอดตรงกัน", mismatch: "ยอดไม่ตรง", completed: "ครบกำหนดสัญญาแล้ว",
+  no_history: "ยังไม่มีประวัติ", has_contract: "มีสัญญาเดิมอยู่แล้ว (ข้าม ไม่บันทึกทับ)", parse_error: "รูปแบบผิด",
+};
+
+function ContractBackfillCompare({ t, token, branchId, pasteCode, onContractCreated }) {
+  const [text, setText] = useState("");
+  const [rows, setRows] = useState(null);
+  const [comparing, setComparing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState(null);
+  const input = mkInput(t);
+
+  useEffect(() => {
+    if (!pasteCode) return;
+    setText((prev) => (prev ? prev + "\n" : "") + pasteCode.code + "\t");
+  }, [pasteCode]);
+
+  async function doCompare() {
+    setComparing(true); setRows(null); setSaveResult(null);
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const out = [];
+    for (const line of lines) {
+      const parsed = parseBackfillLine(line);
+      if (!parsed) { out.push({ raw: line, status: "parse_error" }); continue; }
+      const { code, total_installments, amount_per_installment } = parsed;
+      try {
+        const [existingContract, history] = await Promise.all([
+          supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code)}&select=contract_id&limit=1`, { token }),
+          supabaseRest(`payments?contract_id=is.null&device_code=eq.${encodeURIComponent(code)}&select=*&order=payment_date.asc`, { token }),
+        ]);
+        if (existingContract.length) { out.push({ code, total_installments, amount_per_installment, status: "has_contract" }); continue; }
+        if (!history.length) { out.push({ code, total_installments, amount_per_installment, status: "no_history" }); continue; }
+        const actualAmount = mostCommonAmount(history);
+        const paidThrough = maxCompletedAll(history);
+        const startDate = history[0].payment_date;
+        const status = paidThrough >= total_installments ? "completed" : (Number(actualAmount) === amount_per_installment ? "match" : "mismatch");
+        out.push({ code, total_installments, amount_per_installment, status, actualAmount, paidThrough, startDate });
+      } catch (e) {
+        out.push({ code, total_installments, amount_per_installment, status: "error", msg: e.message });
+      }
+    }
+    setRows(out);
+    setComparing(false);
+  }
+
+  async function doSave() {
+    setSaving(true); setSaveResult(null);
+    const targets = rows.filter((r) => r.status === "match" || r.status === "completed");
+    const out = [];
+    for (const item of targets) {
+      const r = await createContract(token, {
+        device_code: item.code, branch_id: branchId, start_date: item.startDate,
+        total_installments: item.total_installments, amount_per_installment: item.amount_per_installment,
+        status: item.status === "completed" ? "closed" : "active",
+      });
+      if (!r.ok) { out.push({ code: item.code, ok: false, msg: r.msg }); continue; }
+      try {
+        await supabaseRest(`payments?contract_id=is.null&device_code=eq.${encodeURIComponent(item.code)}`, {
+          method: "PATCH", token, body: { contract_id: r.contract.contract_id, needs_review: false },
+        });
+      } catch { /* สัญญาสร้างแล้ว จับคู่ payment เก่าไม่สำเร็จก็ไปแก้ทีหลังผ่าน "ตรวจ+ซ่อมงวด" ได้ */ }
+      out.push({ code: item.code, ok: true, msg: `สร้างสัญญาแล้ว (contract_id ${r.contract.contract_id})` });
+    }
+    setSaveResult(out);
+    setSaving(false);
+    setRows((prev) => prev.filter((r) => !(r.status === "match" || r.status === "completed")));
+    setText("");
+    onContractCreated?.();
+  }
+
+  const counts = useMemo(() => {
+    const c = { match: 0, mismatch: 0, completed: 0, no_history: 0, has_contract: 0 };
+    (rows || []).forEach((r) => { if (c[r.status] !== undefined) c[r.status]++; });
+    return c;
+  }, [rows]);
+  const saveable = rows ? rows.filter((r) => r.status === "match" || r.status === "completed").length : 0;
+
+  return (
+    <Card t={t}>
+      <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 6 }}>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</div>
+      <div style={{ fontSize: 12, color: t.ink2, marginBottom: 12, lineHeight: 1.6 }}>วางข้อมูล (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) คั่นด้วย Tab หนึ่งบรรทัดต่อหนึ่งคน ระบบจะเทียบกับประวัติจริงใน Working Reference — วันที่เริ่มสัญญาจะใช้วันที่จ่ายแรกสุดในประวัติให้อัตโนมัติ (ระบบเดิมไม่ได้ให้กรอกเอง)</div>
+      <textarea style={{ ...input, height: 110, resize: "vertical", fontFamily: "'IBM Plex Mono', monospace" }} value={text} onChange={(e) => { setText(e.target.value); setRows(null); setSaveResult(null); }} placeholder={"8028\t10\t1900"} />
+      <button onClick={doCompare} disabled={comparing || !text.trim()} style={{ marginTop: 12, background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: comparing ? "default" : "pointer", fontFamily: "inherit", opacity: comparing || !text.trim() ? 0.6 : 1 }}>
+        {comparing ? "กำลังเทียบข้อมูล..." : "เทียบข้อมูล"}
+      </button>
+
+      {rows && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            {[["ตรงกัน", counts.match, t.ok], ["ยอดไม่ตรง", counts.mismatch, t.warn], ["ครบกำหนดสัญญาแล้ว", counts.completed, t.info], ["ยังไม่มีประวัติ", counts.no_history, t.bad], ["มีสัญญาเดิมอยู่แล้ว (ข้าม)", counts.has_contract, t.ink3]].map(([lbl, n, color]) => (
+              <div key={lbl} style={{ background: t.surfaceAlt, borderRadius: 8, padding: "8px 12px", minWidth: 100 }}>
+                <div style={{ fontSize: 11, color: t.ink2 }}>{lbl}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color }}>{n}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ overflowX: "auto", marginBottom: 14 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 640 }}>
+              <thead><tr style={{ background: t.surfaceAlt }}>
+                {["รหัสลูกค้า", "จำนวนงวด", "ผ่อนเดือนละ (สัญญา)", "ยอดจริงจากประวัติ", "จ่ายครบงวดถึง", "สถานะ"].map((h, i) => (
+                  <th key={i} style={{ textAlign: i >= 1 && i <= 4 ? "right" : "left", padding: "8px 12px", color: t.ink2, fontWeight: 500, fontSize: 11 }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${t.border}` }}>
+                    <td style={{ padding: "8px 12px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.code || r.raw}</td>
+                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.total_installments ?? "—"}</td>
+                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.amount_per_installment != null ? fmt(r.amount_per_installment) : "—"}</td>
+                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.actualAmount != null ? fmt(r.actualAmount) : "—"}</td>
+                    <td style={{ padding: "8px 12px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.paidThrough ?? "—"}</td>
+                    <td style={{ padding: "8px 12px" }}>
+                      <span style={{ color: r.status === "match" ? t.ok : r.status === "completed" ? t.info : r.status === "mismatch" ? t.warn : t.bad, fontWeight: 600 }}>
+                        {BACKFILL_STATUS_LABEL[r.status] || r.msg || r.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {saveable > 0 && (
+            <button onClick={doSave} disabled={saving} style={{ background: t.ok, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: saving ? "default" : "pointer", fontFamily: "inherit", opacity: saving ? 0.6 : 1 }}>
+              {saving ? "กำลังบันทึก..." : `บันทึกลงข้อมูลสัญญา (${saveable} คน)`}
+            </button>
+          )}
+          {saveResult && (
+            <div style={{ marginTop: 10 }}>
+              {saveResult.map((r, i) => (<div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>{r.code}: {r.msg}</div>))}
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ContractBackfillPage({ t, token, branchId, onContractCreated }) {
+  const [pasteCode, setPasteCode] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  return (
+    <div>
+      <ContractBackfillDiscovery t={t} token={token} refreshKey={refreshKey} onPick={(code) => setPasteCode({ code, n: Date.now() })} />
+      <ContractBackfillCompare t={t} token={token} branchId={branchId} pasteCode={pasteCode} onContractCreated={() => { setRefreshKey((n) => n + 1); onContractCreated?.(); }} />
     </div>
   );
 }
@@ -1329,8 +1440,8 @@ function WRPage({ t, token, branchId, computed, onContractCreated }) {
         {tabBtn("search", "ค้นหา/ดูข้อมูล")}
         {tabBtn("import", "นำเข้าข้อมูล")}
         {tabBtn("newcontract", "เพิ่มสัญญาใหม่")}
+        {tabBtn("backfill", "ข้อมูลสัญญา")}
         {tabBtn("close", "ย้ายลูกค้าคืนเครื่อง")}
-        {tabBtn("review", "ลูกค้าที่ยังไม่มีสัญญา")}
       </div>
 
       {tab === "search" && (
@@ -1388,8 +1499,8 @@ function WRPage({ t, token, branchId, computed, onContractCreated }) {
       )}
 
       {tab === "newcontract" && <NewContractCard t={t} token={token} branchId={branchId} onCreated={onContractCreated} />}
+      {tab === "backfill" && <ContractBackfillPage t={t} token={token} branchId={branchId} onContractCreated={onContractCreated} />}
       {tab === "close" && <CloseContractCard t={t} token={token} branchId={branchId} />}
-      {tab === "review" && <MissingContractList t={t} token={token} branchId={branchId} computed={computed} onContractCreated={onContractCreated} />}
     </div>
   );
 }
@@ -2049,7 +2160,7 @@ function AccountSettingsPage({ t, token, profile, onSaved, bgStyle, setBgStyle, 
 }
 
 function CheckPage() {
-  const [mode, setMode] = useState("dark");
+  const [mode, setMode] = useState("light"); // ค่าเริ่มต้นก่อน login/โหลดโปรไฟล์เสร็จ
   // รูปแบบพื้นหลัง "กระจกฝ้า" — ตั้งได้จากหน้าตั้งค่าบัญชี เก็บแค่ localStorage ต่อเครื่อง ไม่ผูกบัญชี
   const [bgStyle, setBgStyle] = useState(() => { try { return localStorage.getItem("bg_style") || "normal"; } catch { return "normal"; } });
   const [glassOpacity, setGlassOpacity] = useState(() => { try { const v = parseFloat(localStorage.getItem("bg_glass_opacity")); return isNaN(v) ? 0.55 : v; } catch { return 0.55; } });
@@ -2084,6 +2195,22 @@ function CheckPage() {
   function handleLogout() {
     setSession(null);
     setProfile(null);
+  }
+
+  // ดึงโหมดสว่าง/มืดที่บัญชีนี้ตั้งไว้ล่าสุดมาใช้ทันทีที่โปรไฟล์โหลดเสร็จ (ผูกกับบัญชี ต่างจาก
+  // รูปแบบพื้นหลัง/กระจกฝ้าที่ผูกไว้กับเครื่อง) — คีย์ effect ด้วย user_id เพื่อดึงแค่ครั้งเดียวตอน
+  // ล็อกอินแต่ละครั้ง ไม่ทับโหมดที่กำลังสลับอยู่ทุกครั้งที่ profile object อัปเดตจากที่อื่น
+  useEffect(() => {
+    if (profile?.theme_mode) setMode(profile.theme_mode);
+  }, [profile?.user_id]);
+
+  function toggleMode() {
+    const next = mode === "dark" ? "light" : "dark";
+    setMode(next);
+    if (session?.access_token && profile?.user_id) {
+      supabaseRest(`users?user_id=eq.${profile.user_id}`, { method: "PATCH", token: session.access_token, body: { theme_mode: next } }).catch(() => {});
+      setProfile((prev) => (prev ? { ...prev, theme_mode: next } : prev));
+    }
   }
 
   const LOCAL_KEY = "checkpage_rows_v1";
@@ -2274,7 +2401,7 @@ function CheckPage() {
               <Bell size={15} />
               <span style={{ position: "absolute", top: 6, right: 7, width: 6, height: 6, borderRadius: 99, background: t.bad }} />
             </button>
-            <button onClick={() => setMode(mode === "dark" ? "light" : "dark")} aria-label="สลับโหมด" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink, ...glassSurfaceStyle(t) }}>
+            <button onClick={toggleMode} aria-label="สลับโหมด" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink, ...glassSurfaceStyle(t) }}>
               {mode === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>
