@@ -1193,7 +1193,7 @@ function ContractBackfillDiscovery({ t, token, refreshKey, onPick }) {
     try {
       const [orphans, contracts] = await Promise.all([
         supabaseRest(`payments?contract_id=is.null&device_code=not.is.null&select=device_code&limit=5000`, { token }),
-        supabaseRest(`contracts?select=device_code`, { token }),
+        supabaseRest(`contracts?select=device_code&limit=50000`, { token }),
       ]);
       const hasContract = new Set(contracts.map((c) => c.device_code));
       const counts = new Map();
