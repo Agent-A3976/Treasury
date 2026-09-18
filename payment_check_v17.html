@@ -2269,7 +2269,13 @@ function CheckPage() {
         }
         if (cancelled) return;
         setBranchList(allowed);
-        setBranchId((prev) => (prev && allowed.some((b) => b.branch_id === prev) ? prev : allowed[0]?.branch_id || ""));
+        // ตอนนี้เอาสุราษฎร์ธานีเป็นสาขาหลักไปก่อน (สาขาอื่นพักไว้ ยังไม่มีข้อมูลลูกค้าจริง) เลยตั้งเป็น
+        // ค่าเริ่มต้นถ้าเข้าถึงได้ — ไม่งั้นค่อย fallback ไปตัวแรกตามเดิม
+        setBranchId((prev) => {
+          if (prev && allowed.some((b) => b.branch_id === prev)) return prev;
+          if (allowed.some((b) => b.branch_id === "surat")) return "surat";
+          return allowed[0]?.branch_id || "";
+        });
       } catch { if (!cancelled) setBranchList([]); }
     })();
     return () => { cancelled = true; };
