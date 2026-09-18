@@ -99,6 +99,22 @@ async function supabaseRest(path, { method = "GET", token, body } = {}) {
   return data;
 }
 
+// ดึงทุกแถวโดยไม่สนใจ max-rows ที่ตั้งไว้ระดับโปรเจกต์ฝั่ง Supabase (พบว่าตั้งไว้ 1,000 แถว —
+// ขอ &limit สูงแค่ไหนก็โดนเพดานนี้ตัดอยู่ดี เพราะ limit ที่ client ขอได้แค่ "น้อยกว่าหรือเท่ากับ"
+// เพดาน ไม่ใช่ "มากกว่า" ได้ ต้อง paginate ด้วย offset วนจนกว่าจะได้ครบ ถึงจะดึงได้ทุกแถวจริงๆ)
+async function supabaseRestAll(path, token, pageSize = 1000) {
+  let all = [];
+  let offset = 0;
+  while (true) {
+    const sep = path.includes("?") ? "&" : "?";
+    const page = await supabaseRest(`${path}${sep}limit=${pageSize}&offset=${offset}`, { token });
+    all = all.concat(page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 const THEME = {
   light: {
     bg: "#F4F6F8", surface: "#FFFFFF", surfaceAlt: "#EEF1F4", sidebar: "#12181D", border: "#DCE3E8",
@@ -1192,8 +1208,8 @@ function ContractBackfillDiscovery({ t, token, refreshKey, onPick }) {
     setLoading(true);
     try {
       const [orphans, contracts] = await Promise.all([
-        supabaseRest(`payments?contract_id=is.null&device_code=not.is.null&select=device_code&limit=5000`, { token }),
-        supabaseRest(`contracts?select=device_code&limit=50000`, { token }),
+        supabaseRestAll(`payments?contract_id=is.null&device_code=not.is.null&select=device_code`, token),
+        supabaseRestAll(`contracts?select=device_code`, token),
       ]);
       const hasContract = new Set(contracts.map((c) => c.device_code));
       const counts = new Map();
