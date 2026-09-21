@@ -1393,73 +1393,221 @@ function ContractBackfillPage({ t, token, branchId, onContractCreated }) {
   );
 }
 
-function WRPage({ t, token, branchId, computed, onContractCreated }) {
-  const [tab, setTab] = useState("search");
-  const [mode, setMode] = useState("latest"); // 'latest' (ค่าเริ่มต้น) | 'date' | 'code'
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [code, setCode] = useState("");
+/* ============================================================================
+ * Working Reference > ค้นหา/ดูข้อมูล — หน้าตาเหมือนระบบเดิม: ช่องค้นหารหัสลูกค้าช่องเดียว
+ * ไม่พิมพ์อะไร = 200 แถวล่าสุดของสาขา / พิมพ์รหัสให้ตรงเป๊ะ = ทุกแถวของรหัสนั้น
+ * คอลัมน์ ยอดงวดปกติ / จำนวนซ้ำของยอด / งวดที่ผ่านแล้ว ไม่ได้เก็บใน DB — คำนวณสดจากประวัติจ่ายของสัญญานั้น
+ * ==========================================================================*/
+const WR_LATEST_LIMIT = 200;
+const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+const WR_COLS = "payment_id,contract_id,installment_number,payment_type,amount,payment_date";
+
+// นับจำนวนแถวทั้งหมดของ query (ไม่โหลดข้อมูลมาจริง) — ล้มเหลวได้เงียบๆ เพราะเป็นแค่ตัวเลขประกอบท้ายตาราง
+async function supabaseCount(path, token) {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      method: "HEAD",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, Prefer: "count=exact" },
+    });
+    const m = /\/(\d+)$/.exec(res.headers.get("content-range") || "");
+    return m ? Number(m[1]) : null;
+  } catch { return null; }
+}
+
+// Supabase ตัดผลลัพธ์ที่ 1000 แถวต่อครั้งโดยไม่แจ้งเตือน — ไล่ดึงทีละหน้าจนครบ (path ต้องมี order ที่ไม่ซ้ำเพื่อไม่ให้แถวตกหล่น)
+async function fetchAllPaged(path, token) {
+  const page = 1000;
+  let out = [];
+  for (let off = 0; ; off += page) {
+    const chunk = await supabaseRest(`${path}&limit=${page}&offset=${off}`, { token });
+    out = out.concat(chunk);
+    if (chunk.length < page) break;
+  }
+  return out;
+}
+
+// ประวัติจ่ายทั้งหมดของสัญญาที่เกี่ยวข้อง แยกตาม contract_id (แบ่งก้อนละ 30 สัญญา ยิงขนานกัน)
+async function fetchHistoriesByContract(token, contractIds) {
+  const ids = [...new Set(contractIds.filter((x) => x !== null && x !== undefined))];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
+  const parts = await Promise.all(chunks.map((c) =>
+    fetchAllPaged(`payments?contract_id=in.(${c.join(",")})&select=${WR_COLS}&order=payment_id.asc`, token)
+  ));
+  const by = {};
+  for (const h of parts.flat()) {
+    if (!by[h.contract_id]) by[h.contract_id] = [];
+    by[h.contract_id].push(h);
+  }
+  return by;
+}
+
+// 200 แถวล่าสุดของสาขา เรียงจากวันที่จ่ายใหม่สุด (วันเดียวกันเรียง payment_id ใหม่สุดก่อน)
+// ใช้ embed contracts!inner กรองสาขาฝั่ง DB (payments ไม่มีคอลัมน์สาขาเอง) — แถวที่ contract_id ว่าง (รอตรวจสอบ) ไม่มีสาขาจึงไม่ขึ้นที่นี่
+async function loadLatestPayments(token, branchId) {
+  const br = encodeURIComponent(branchId);
+  const order = "order=payment_date.desc,payment_id.desc";
+  try {
+    const [rows, total] = await Promise.all([
+      supabaseRest(`payments?select=${WR_COLS},contracts!inner(device_code,branch_id)&contracts.branch_id=eq.${br}&${order}&limit=${WR_LATEST_LIMIT}`, { token }),
+      supabaseCount(`payments?select=payment_id,contracts!inner(branch_id)&contracts.branch_id=eq.${br}`, token),
+    ]);
+    return { rows, total, note: "" };
+  } catch (e) {
+    // ไม่มี foreign key payments→contracts ใน DB จะ embed ไม่ได้ — ถอยไปดึงแยก 2 ขั้นแล้วกรองสาขาฝั่งเบราว์เซอร์แทน
+    if (!/relationship|schema cache/i.test(e.message || "")) throw e;
+    const all = await supabaseRest(`payments?select=${WR_COLS}&contract_id=not.is.null&${order}&limit=${WR_LATEST_LIMIT}`, { token });
+    const ids = [...new Set(all.map((r) => r.contract_id))];
+    const cs = ids.length ? await supabaseRest(`contracts?contract_id=in.(${ids.join(",")})&select=contract_id,device_code,branch_id`, { token }) : [];
+    const byId = Object.fromEntries(cs.map((c) => [c.contract_id, c]));
+    const rows = all.filter((r) => byId[r.contract_id]?.branch_id === branchId).map((r) => ({ ...r, contracts: byId[r.contract_id] }));
+    return { rows, total: null, note: `ดึง ${WR_LATEST_LIMIT} แถวล่าสุดของทุกสาขามากรองเอง จึงอาจเหลือน้อยกว่า ${WR_LATEST_LIMIT} แถว` };
+  }
+}
+
+// ทุกแถวของรหัสนี้ (ตรงเป๊ะ) ในสาขาที่เลือก — รวมทุกสัญญาของรหัสนั้น (active/closed/returned)
+async function loadPaymentsByCode(token, branchId, code) {
+  const contracts = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code)}&branch_id=eq.${encodeURIComponent(branchId)}&select=contract_id,device_code`, { token });
+  if (!contracts.length) return { rows: [], total: null, note: "", histories: {} };
+  const byId = Object.fromEntries(contracts.map((c) => [c.contract_id, c]));
+  const ids = contracts.map((c) => c.contract_id).join(",");
+  const all = await fetchAllPaged(`payments?contract_id=in.(${ids})&select=${WR_COLS}&order=payment_date.desc,payment_id.desc`, token);
+  const histories = {};
+  for (const h of all) { (histories[h.contract_id] = histories[h.contract_id] || []).push(h); }
+  return { rows: all.map((r) => ({ ...r, contracts: byId[r.contract_id] })), total: null, note: "", histories };
+}
+
+// แปลงแถว payments เป็นแถวแสดงผลแบบชีท Working Reference เดิม
+// - งวด(ตัวเลข): เลขงวดเฉพาะแถวที่ไม่มีสถานะในวงเล็บ  - งวดที่ผ่านแล้ว: เลขงวดที่นับว่าจ่ายครบ (บางส่วน/สะสม = ว่าง)
+// - ยอดงวดปกติ: ยอดเต็มของงวดนั้น = ยอดแถวนี้ + ยอดบางส่วน/สะสมของงวดเดียวกัน (แถวบางส่วนเว้นว่าง)
+// - จำนวนซ้ำของยอด: นับงวดที่จ่ายครบแล้วของสัญญานี้ (ถึงงวดนี้) ที่ยอดเต็มเท่ากับยอดงวดปกติ
+function deriveRefRows(rows, histories) {
+  const cache = {};
+  const statsFor = (cid) => {
+    if (cache[cid]) return cache[cid];
+    const hist = histories[cid] || [];
+    const partial = {};
+    for (const h of hist) {
+      if (h.payment_type === "สะสม" || h.payment_type === "บางส่วน") partial[h.installment_number] = (partial[h.installment_number] || 0) + (Number(h.amount) || 0);
+    }
+    const completed = hist
+      .filter((h) => periodsCompletedFromPayment(h) !== null)
+      .map((h) => ({ n: h.installment_number, full: (Number(h.amount) || 0) + (partial[h.installment_number] || 0) }));
+    return (cache[cid] = { partial, completed });
+  };
+  return rows.map((r) => {
+    const n = r.installment_number;
+    const passed = periodsCompletedFromPayment(r);
+    const [y, m, d] = String(r.payment_date || "").split("-").map(Number);
+    let normal = "", repeat = "";
+    if (passed !== null) {
+      const st = statsFor(r.contract_id);
+      const full = (Number(r.amount) || 0) + (st.partial[n] || 0);
+      normal = full;
+      repeat = st.completed.filter((x) => x.n <= n && x.full === full).length;
+    }
+    return {
+      key: r.payment_id,
+      code: r.contracts?.device_code || "—",
+      label: r.payment_type ? `${n}(${r.payment_type})` : String(n),
+      amount: Number(r.amount) || 0,
+      plainNo: r.payment_type ? "" : n,
+      normal, repeat,
+      passed: passed === null ? "" : passed,
+      day: d || "", month: m ? TH_MONTHS[m - 1] : "", year: y ? y + 543 : "",
+      no: n,
+    };
+  });
+}
+
+function WRSearchTab({ t, token, branchId }) {
+  const [query, setQuery] = useState("");
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
+  const reqId = useRef(0);
+  const q = query.trim();
 
-  const LATEST_LIMIT = 200;
-
-  // รายการล่าสุด LATEST_LIMIT แถวของสาขาที่เลือก เรียงตามวันที่จ่ายใหม่สุดก่อน (วันเดียวกันเรียงตาม payment_id ใหม่สุดก่อน)
-  // ใช้ embed contracts!inner เพื่อกรองสาขาที่ฝั่ง DB ให้ได้ครบ 200 แถวจริงๆ (payments ไม่มีคอลัมน์สาขาเอง)
-  // — payments ที่ contract_id ว่าง (รอตรวจสอบ) ไม่มีสาขา จึงไม่ขึ้นในโหมดนี้ ดูได้ที่แท็บ "ข้อมูลสัญญา"
-  async function runLatest() {
-    setLoading(true); setErr(""); setNote(""); setRows([]);
-    const cols = "payment_id,contract_id,installment_number,payment_type,amount,payment_date,device_code";
-    const order = "order=payment_date.desc,payment_id.desc";
-    try {
-      let data;
+  // พิมพ์รหัสแล้วรอ 350ms ค่อยค้น (ไม่พิมพ์อะไร = โหลด 200 แถวล่าสุดทันที) — reqId กันผลของคำค้นเก่าที่ตอบช้ามาทับของใหม่
+  useEffect(() => {
+    if (!token || !branchId) return;
+    const myReq = ++reqId.current;
+    const timer = setTimeout(async () => {
+      setLoading(true); setErr("");
       try {
-        data = await supabaseRest(`payments?select=${cols},contracts!inner(device_code,branch_id)&contracts.branch_id=eq.${encodeURIComponent(branchId)}&${order}&limit=${LATEST_LIMIT}`, { token });
+        const res = q ? await loadPaymentsByCode(token, branchId, q) : await loadLatestPayments(token, branchId);
+        const hist = res.histories || await fetchHistoriesByContract(token, res.rows.map((r) => r.contract_id));
+        if (myReq !== reqId.current) return;
+        setRows(deriveRefRows(res.rows, hist));
+        setTotal(res.total ?? null);
+        setNote(res.note || "");
       } catch (e) {
-        // ถ้าฐานข้อมูลไม่มี foreign key ระหว่าง payments→contracts จะ embed ไม่ได้ — ถอยไปดึงแยก 2 ขั้นแล้วกรองสาขาฝั่งเบราว์เซอร์แทน
-        if (!/relationship|schema cache/i.test(e.message || "")) throw e;
-        const all = await supabaseRest(`payments?select=${cols}&contract_id=not.is.null&${order}&limit=${LATEST_LIMIT}`, { token });
-        const ids = [...new Set(all.map((r) => r.contract_id))];
-        const cs = ids.length ? await supabaseRest(`contracts?contract_id=in.(${ids.join(",")})&select=contract_id,device_code,branch_id`, { token }) : [];
-        const byId = Object.fromEntries(cs.map((c) => [c.contract_id, c]));
-        data = all.filter((r) => byId[r.contract_id]?.branch_id === branchId).map((r) => ({ ...r, contracts: byId[r.contract_id] }));
-        setNote(`ดึงข้อมูล ${LATEST_LIMIT} แถวล่าสุดของทุกสาขามากรองเอง จึงอาจเหลือน้อยกว่า ${LATEST_LIMIT} แถว`);
+        if (myReq === reqId.current) { setErr(e.message); setRows([]); setNote(""); }
+      } finally {
+        if (myReq === reqId.current) setLoading(false);
       }
-      setRows(data);
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
-  }
+    }, q ? 350 : 0);
+    return () => clearTimeout(timer);
+  }, [token, branchId, q]);
 
-  async function runDateSearch() {
-    setLoading(true); setErr(""); setRows([]);
-    try {
-      const data = await supabaseRest(`payments?payment_date=eq.${date}&select=payment_id,contract_id,installment_number,payment_type,amount,payment_date&order=payment_id.desc&limit=300`, { token });
-      setRows(data);
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
-  }
-  async function runCodeSearch(e) {
-    e?.preventDefault();
-    if (!code.trim()) return;
-    setLoading(true); setErr(""); setRows([]);
-    try {
-      const contracts = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code.trim())}&branch_id=eq.${branchId}&select=contract_id`, { token });
-      if (!contracts.length) { setErr("ไม่พบรหัสนี้ในสาขาที่เลือก"); return; }
-      const ids = contracts.map((c) => c.contract_id).join(",");
-      const data = await supabaseRest(`payments?contract_id=in.(${ids})&select=payment_id,contract_id,installment_number,payment_type,amount,payment_date&order=payment_date.desc`, { token });
-      setRows(data);
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
-  }
+  const heads = [["รหัสลูกค้า", "left"], ["งวดที่", "left"], ["จำนวนเงิน", "right"], ["งวด(ตัวเลข)", "left"], ["ยอดงวดปกติ", "right"], ["จำนวนซ้ำของยอด", "left"], ["งวดที่ผ่านแล้ว", "left"], ["วันที่", "left"], ["เดือน", "left"], ["พ.ศ.", "left"], ["เลขงวด", "left"]];
+  const td = { padding: "12px 14px", whiteSpace: "nowrap", borderBottom: `1px solid ${t.border}` };
+  const mono = { fontFamily: "'IBM Plex Mono', monospace" };
+  const money = (v) => (v === "" ? "" : Number(v).toLocaleString());
 
-  useEffect(() => { if (token && tab === "search" && mode === "date") runDateSearch(); }, [token, date, mode, tab]);
-  useEffect(() => { if (token && branchId && tab === "search" && mode === "latest") runLatest(); }, [token, branchId, mode, tab]);
+  return (
+    <Card t={t}>
+      <input
+        style={{ ...mkInput(t), fontFamily: "inherit", padding: "13px 14px", marginBottom: 14 }}
+        placeholder="ค้นหารหัสลูกค้า..." value={query} onChange={(e) => setQuery(e.target.value)}
+      />
+      <ErrBox t={t} msg={err} />
+      {note && <div style={{ fontSize: 12, color: t.warn, background: t.warnSoft, borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>{note}</div>}
+      <div style={{ border: `1px solid ${t.border}`, borderRadius: 10, overflow: "auto", maxHeight: 660, opacity: loading && rows.length ? 0.5 : 1 }}>
+        {loading && rows.length === 0 ? <Loading t={t} /> : rows.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>{q ? `ไม่พบรหัส "${q}" ในสาขานี้` : "ไม่มีรายการ"}</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 14 }}>
+            <thead>
+              <tr>
+                {heads.map(([h, align]) => (
+                  <th key={h} style={{ position: "sticky", top: 0, zIndex: 1, background: t.surfaceAlt, textAlign: align, padding: "12px 14px", color: t.ink, fontWeight: 600, fontSize: 13.5, whiteSpace: "nowrap", borderBottom: `1px solid ${t.border}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.key}>
+                  <td style={td}>{r.code}</td>
+                  <td style={td}>{r.label}</td>
+                  <td style={{ ...td, ...mono, textAlign: "right" }}>{money(r.amount)}</td>
+                  <td style={td}>{r.plainNo}</td>
+                  <td style={{ ...td, ...mono, textAlign: "right" }}>{money(r.normal)}</td>
+                  <td style={td}>{r.repeat}</td>
+                  <td style={td}>{r.passed}</td>
+                  <td style={td}>{r.day}</td>
+                  <td style={td}>{r.month}</td>
+                  <td style={td}>{r.year}</td>
+                  <td style={td}>{r.no}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div style={{ fontSize: 12.5, color: t.ink3, marginTop: 12 }}>
+        {q
+          ? (loading ? "กำลังค้นหา..." : `พบ ${rows.length.toLocaleString()} แถวของรหัส "${q}"`)
+          : `${total !== null ? `ทั้งหมด ${total.toLocaleString()} แถว — ` : ""}พิมพ์รหัสลูกค้าให้ตรงเป๊ะเพื่อค้นหา (แสดง ${WR_LATEST_LIMIT} แถวล่าสุด)`}
+      </div>
+    </Card>
+  );
+}
 
-  // สลับโหมดแล้วล้างผลของโหมดก่อนหน้า (กันตารางเก่าค้างอยู่ระหว่างโหมด "ค้นหาตามรหัส" ที่ยังไม่ได้กดค้นหา)
-  function switchMode(m) { setMode(m); setRows([]); setErr(""); setNote(""); }
-
-  const input = mkInput(t), label = mkLabel(t);
+function WRPage({ t, token, branchId, computed, onContractCreated }) {
+  const [tab, setTab] = useState("search");
   const tabBtn = (key, lbl) => (
     <button onClick={() => setTab(key)} style={{ background: tab === key ? t.surface : "transparent", color: tab === key ? t.ink : t.ink2, border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 13, fontWeight: tab === key ? 600 : 500, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === key ? t.shadow : "none" }}>
       {lbl}
@@ -1477,61 +1625,7 @@ function WRPage({ t, token, branchId, computed, onContractCreated }) {
         {tabBtn("close", "ย้ายลูกค้าคืนเครื่อง")}
       </div>
 
-      {tab === "search" && (
-        <>
-          <Card t={t} style={{ marginBottom: 16 }}>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              {[["latest", `ล่าสุด ${LATEST_LIMIT} แถว`], ["date", "ดูตามวันที่"], ["code", "ค้นหาตามรหัสลูกค้า"]].map(([m, lbl]) => (
-                <button key={m} onClick={() => switchMode(m)} style={{ background: mode === m ? t.accent : "transparent", color: mode === m ? t.accentInk : t.ink, border: `1px solid ${mode === m ? t.accent : t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>{lbl}</button>
-              ))}
-            </div>
-            {mode === "latest" ? (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 12.5, color: t.ink2, lineHeight: 1.6 }}>
-                  {loading ? "กำลังโหลด..." : `แสดง ${rows.length.toLocaleString()} รายการล่าสุดของสาขานี้ เรียงจากวันที่จ่ายใหม่สุด`}
-                </div>
-                <button onClick={runLatest} disabled={loading} style={{ background: "transparent", color: t.ink, border: `1px solid ${t.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, cursor: loading ? "default" : "pointer", fontFamily: "inherit", fontWeight: 600, opacity: loading ? 0.5 : 1 }}>โหลดใหม่</button>
-              </div>
-            ) : mode === "date" ? (
-              <div style={{ maxWidth: 200 }}>
-                <label style={label}>วันที่</label>
-                <input type="date" style={input} value={date} onChange={(e) => setDate(e.target.value)} />
-              </div>
-            ) : (
-              <form onSubmit={runCodeSearch} style={{ display: "flex", gap: 10 }}>
-                <input style={input} placeholder="รหัสลูกค้า เช่น 9" value={code} onChange={(e) => setCode(e.target.value)} />
-                <button type="submit" style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>ค้นหา</button>
-              </form>
-            )}
-          </Card>
-          <ErrBox t={t} msg={err} />
-          {note && <div style={{ fontSize: 12, color: t.warn, background: t.warnSoft, borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>{note}</div>}
-          <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
-            {loading ? <Loading t={t} /> : rows.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: t.ink3, fontSize: 13.5 }}>ไม่มีรายการ</div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-                <thead><tr style={{ background: t.surfaceAlt }}>
-                  {[mode === "latest" ? "รหัสลูกค้า" : "contract_id", "งวดที่", "ประเภท", "จำนวนเงิน", "วันที่จ่าย"].map((h, i) => (
-                    <th key={i} style={{ textAlign: i === 3 ? "right" : "left", padding: "9px 14px", color: t.ink2, fontWeight: 500, fontSize: 11.5 }}>{h}</th>
-                  ))}
-                </tr></thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.payment_id} style={{ borderTop: `1px solid ${t.border}` }}>
-                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{mode === "latest" ? (r.contracts?.device_code || r.device_code || "—") : r.contract_id}</td>
-                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.installment_number}</td>
-                      <td style={{ padding: "9px 14px" }}>{r.payment_type || "—"}</td>
-                      <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{Number(r.amount).toLocaleString()}</td>
-                      <td style={{ padding: "9px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.payment_date}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </Card>
-        </>
-      )}
+      {tab === "search" && <WRSearchTab t={t} token={token} branchId={branchId} />}
 
       {tab === "import" && (
         <>
