@@ -47,6 +47,7 @@ const Loader2 = (p) => <Icon {...p}><path d="M21 12a9 9 0 1 1-6.2-8.6" /></Icon>
 const AlertTriangle = (p) => <Icon {...p}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></Icon>;
 const Eye = (p) => <Icon {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></Icon>;
 const EyeOff = (p) => <Icon {...p}><path d="M17.9 17.9A10.4 10.4 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 4.2-5.2M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.6 18.6 0 0 1-2.2 3.2" /><path d="M9.5 9.5a3 3 0 0 0 4.2 4.2" /><line x1="1" y1="1" x2="23" y2="23" /></Icon>;
+const ExternalLink = (p) => <Icon {...p}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></Icon>;
 const UserIcon = (p) => <Icon {...p}><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6" /></Icon>;
 
 
@@ -78,6 +79,111 @@ async function supabaseAuth(path, body) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error_description || data.msg || data.error || "เกิดข้อผิดพลาด");
   return data;
+}
+
+/* ============================================================================
+ * Session ถาวร — เก็บใน localStorage ให้รีเฟรช/เปิดแท็บใหม่แล้วไม่ต้องล็อกอินซ้ำ (เหมือนที่ supabase-js ทำ)
+ * แท็บทั้งหมดในเบราว์เซอร์เดียวกันใช้ session เดียวกัน: ล็อกอิน/ออกจากระบบ/ต่ออายุในแท็บไหน แท็บอื่นตามทันที
+ * ==========================================================================*/
+const SESSION_KEY = "sb_session_v1";
+const REFRESH_MARGIN_SEC = 120; // ต่ออายุก่อนโทเคนหมดอายุ 2 นาที
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+function readStoredSession() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+    return s && s.access_token && s.refresh_token && s.user?.id ? s : null;
+  } catch { return null; }
+}
+function storeSession(data, prev) {
+  const s = {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: data.expires_at || nowSec() + (data.expires_in || 3600),
+    user: data.user || prev?.user,
+  };
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch {}
+  return s;
+}
+function clearStoredSession() { try { localStorage.removeItem(SESSION_KEY); } catch {} }
+
+// ต่ออายุด้วย refresh token — ครอบด้วย navigator.locks กันหลายแท็บยิงต่ออายุพร้อมกัน (refresh token ของ Supabase
+// เปลี่ยนตัวทุกครั้งที่ใช้ ถ้าสองแท็บใช้ตัวเก่าพร้อมกันแท็บที่แพ้จะโดนเตะออกจากระบบ) และเช็คก่อนเสมอว่าอีกแท็บ
+// ต่ออายุให้แล้วหรือยัง  error.fatal = เซิร์ฟเวอร์ปฏิเสธ refresh token จริง ต้องล็อกอินใหม่ / ไม่ fatal = เน็ตสะดุด ลองใหม่ทีหลังได้
+async function refreshSession(current) {
+  const run = async () => {
+    const stored = readStoredSession();
+    if (stored && stored.expires_at > nowSec() + REFRESH_MARGIN_SEC) return stored;
+    const base = stored || current;
+    let res;
+    try {
+      res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY },
+        body: JSON.stringify({ refresh_token: base.refresh_token }),
+      });
+    } catch { throw new Error("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้"); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error_description || data.msg || "ต่ออายุการเข้าสู่ระบบไม่สำเร็จ");
+      err.fatal = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429;
+      throw err;
+    }
+    return storeSession(data, base);
+  };
+  if (typeof navigator !== "undefined" && navigator.locks?.request) return navigator.locks.request("sb-session-refresh", run);
+  return run();
+}
+
+/* ============================================================================
+ * สาขา + หน้าที่เปิดอยู่ ผูกกับ URL (?branch=surat&page=wr) — แต่ละแท็บมีสาขาของตัวเอง เปิดหลายสาขาพร้อมกันได้
+ * ==========================================================================*/
+function readInitialBranch() {
+  try { return new URLSearchParams(location.search).get("branch") || localStorage.getItem("last_branch") || ""; }
+  catch { return ""; }
+}
+function readInitialPage() {
+  try {
+    const p = new URLSearchParams(location.search).get("page");
+    return NAV.some((n) => n.key === p) ? p : "check";
+  } catch { return "check"; }
+}
+function buildPageUrl(branch, page) {
+  const u = new URL(location.href);
+  if (branch) u.searchParams.set("branch", branch); else u.searchParams.delete("branch");
+  if (page && page !== "check") u.searchParams.set("page", page); else u.searchParams.delete("page");
+  return u.toString();
+}
+
+// รายการที่กำลังตรวจ เก็บแยกตามสาขา (คีย์เดิม checkpage_rows_v1 ไม่แยกสาขา จึงเขียนทับกันถ้าเปิดสองสาขาพร้อมกัน)
+const ROWS_KEY_LEGACY = "checkpage_rows_v1";
+const rowsKey = (branch) => `checkpage_rows_v2:${branch}`;
+// คีย์แยกไว้ "ประกาศเหตุการณ์" (เพิ่ม/ลบ/ล้าง) ให้ทุกแท็บที่เปิดสาขาเดียวกันเห็นแบบเรียลไทม์ — แยกจาก rowsKey ที่เก็บ
+// สแนปช็อตทั้งก้อนไว้ใช้ตอนเปิดแท็บใหม่/รีเฟรชเท่านั้น เพราะการ diff สแนปช็อตสองก้อนบอกไม่ได้ว่าฝั่งไหนเพิ่ม/ลบจริงๆ
+// เมื่อสองแท็บแก้พร้อมกัน ส่วนประกาศเหตุการณ์นี้จึงทำให้ผลของทั้งสองแท็บ "รวมกัน" แทนที่แท็บหนึ่งจะทับอีกแท็บ
+const rowsOpKey = (branch) => `checkpage_rows_op_v1:${branch}`;
+const TAB_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function broadcastRowOp(branch, op) {
+  if (!branch) return;
+  try { localStorage.setItem(rowsOpKey(branch), JSON.stringify({ ...op, ts: Date.now(), nonce: Math.random().toString(36).slice(2), tabId: TAB_ID })); } catch {}
+}
+// เวลา+เลขสุ่ม แทนตัวนับทีละ 1 ต่อแท็บ — สองแท็บเปิดพร้อมกันแล้วกดเพิ่มรายการพร้อมกัน ตัวนับแบบเดิมอาจได้เลขเดียวกัน
+// ทำให้ระบบซิงก์เข้าใจผิดว่าเป็นแถวเดียวกัน (ถูกข้ามไปเพราะคิดว่ามีอยู่แล้ว) จนแถวหนึ่งหายไป
+function makeRowId() { return Date.now() * 1000 + Math.floor(Math.random() * 1000); }
+function loadRows(branch) {
+  if (!branch) return [];
+  try {
+    const v2 = localStorage.getItem(rowsKey(branch));
+    if (v2) return JSON.parse(v2);
+    // รายการจากเวอร์ชันก่อนหน้า (ไม่รู้ว่าเป็นของสาขาไหน) ย้ายมาให้สาขาแรกที่เปิดหลังอัปเดต ครั้งเดียว
+    const legacy = localStorage.getItem(ROWS_KEY_LEGACY);
+    if (legacy) {
+      localStorage.setItem(rowsKey(branch), legacy);
+      localStorage.removeItem(ROWS_KEY_LEGACY);
+      return JSON.parse(legacy);
+    }
+  } catch {}
+  return [];
 }
 
 async function supabaseRest(path, { method = "GET", token, body } = {}) {
@@ -1400,7 +1506,7 @@ function ContractBackfillPage({ t, token, branchId, onContractCreated }) {
  * ==========================================================================*/
 const WR_LATEST_LIMIT = 200;
 const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
-const WR_COLS = "payment_id,contract_id,installment_number,payment_type,amount,payment_date";
+const WR_COLS = "payment_id,contract_id,installment_number,payment_type,amount,payment_date,device_code";
 
 // นับจำนวนแถวทั้งหมดของ query (ไม่โหลดข้อมูลมาจริง) — ล้มเหลวได้เงียบๆ เพราะเป็นแค่ตัวเลขประกอบท้ายตาราง
 async function supabaseCount(path, token) {
@@ -1442,17 +1548,28 @@ async function fetchHistoriesByContract(token, contractIds) {
   return by;
 }
 
-// 200 แถวล่าสุดของสาขา เรียงจากวันที่จ่ายใหม่สุด (วันเดียวกันเรียง payment_id ใหม่สุดก่อน)
-// ใช้ embed contracts!inner กรองสาขาฝั่ง DB (payments ไม่มีคอลัมน์สาขาเอง) — แถวที่ contract_id ว่าง (รอตรวจสอบ) ไม่มีสาขาจึงไม่ขึ้นที่นี่
+// เรียงใหม่สุดก่อน: วันที่จ่ายล่าสุดขึ้นบน (วันเดียวกันเรียง payment_id ใหม่สุดก่อน)
+function sortNewestFirst(rows) {
+  return rows.sort((x, y) => (x.payment_date < y.payment_date ? 1 : x.payment_date > y.payment_date ? -1 : y.payment_id - x.payment_id));
+}
+
+// 200 แถวล่าสุดของสาขา รวม 2 กลุ่ม:
+//  1) แถวที่ผูกสัญญาในสาขานี้แล้ว (embed contracts!inner กรองสาขาฝั่ง DB — payments ไม่มีคอลัมน์สาขาเอง)
+//  2) แถวที่ยังไม่ผูกสัญญา (contract_id ว่าง) — ประวัติที่ย้ายมาจากระบบเดิม/รอตรวจสอบ ไม่มีสาขาติดมา จึงโชว์ทุกสาขา
+// ดึงแต่ละกลุ่มมา 200 แถวแล้วรวมเรียงใหม่สุดก่อน ตัดเหลือ 200 (ที่นี่เดิมกรองแค่กลุ่ม 1 ทำให้ประวัติเก่าที่ยังไม่ผูกสัญญาหายไปหมด)
 async function loadLatestPayments(token, branchId) {
   const br = encodeURIComponent(branchId);
   const order = "order=payment_date.desc,payment_id.desc";
+  const [unlinked, unlinkedTotal] = await Promise.all([
+    supabaseRest(`payments?select=${WR_COLS}&contract_id=is.null&${order}&limit=${WR_LATEST_LIMIT}`, { token }),
+    supabaseCount(`payments?select=payment_id&contract_id=is.null`, token),
+  ]);
+  let linked, linkedTotal, note = "";
   try {
-    const [rows, total] = await Promise.all([
+    [linked, linkedTotal] = await Promise.all([
       supabaseRest(`payments?select=${WR_COLS},contracts!inner(device_code,branch_id)&contracts.branch_id=eq.${br}&${order}&limit=${WR_LATEST_LIMIT}`, { token }),
       supabaseCount(`payments?select=payment_id,contracts!inner(branch_id)&contracts.branch_id=eq.${br}`, token),
     ]);
-    return { rows, total, note: "" };
   } catch (e) {
     // ไม่มี foreign key payments→contracts ใน DB จะ embed ไม่ได้ — ถอยไปดึงแยก 2 ขั้นแล้วกรองสาขาฝั่งเบราว์เซอร์แทน
     if (!/relationship|schema cache/i.test(e.message || "")) throw e;
@@ -1460,21 +1577,30 @@ async function loadLatestPayments(token, branchId) {
     const ids = [...new Set(all.map((r) => r.contract_id))];
     const cs = ids.length ? await supabaseRest(`contracts?contract_id=in.(${ids.join(",")})&select=contract_id,device_code,branch_id`, { token }) : [];
     const byId = Object.fromEntries(cs.map((c) => [c.contract_id, c]));
-    const rows = all.filter((r) => byId[r.contract_id]?.branch_id === branchId).map((r) => ({ ...r, contracts: byId[r.contract_id] }));
-    return { rows, total: null, note: `ดึง ${WR_LATEST_LIMIT} แถวล่าสุดของทุกสาขามากรองเอง จึงอาจเหลือน้อยกว่า ${WR_LATEST_LIMIT} แถว` };
+    linked = all.filter((r) => byId[r.contract_id]?.branch_id === branchId).map((r) => ({ ...r, contracts: byId[r.contract_id] }));
+    linkedTotal = null;
+    note = `ดึง ${WR_LATEST_LIMIT} แถวล่าสุดของทุกสาขามากรองเอง จึงอาจเหลือน้อยกว่า ${WR_LATEST_LIMIT} แถว`;
   }
+  const rows = sortNewestFirst([...linked, ...unlinked.map((r) => ({ ...r, contracts: null }))]).slice(0, WR_LATEST_LIMIT);
+  const total = linkedTotal !== null && unlinkedTotal !== null ? linkedTotal + unlinkedTotal : null;
+  return { rows, total, unlinkedTotal, note };
 }
 
-// ทุกแถวของรหัสนี้ (ตรงเป๊ะ) ในสาขาที่เลือก — รวมทุกสัญญาของรหัสนั้น (active/closed/returned)
+// ทุกแถวของรหัสนี้ (ตรงเป๊ะ) — สัญญาของรหัสนี้ในสาขาที่เลือก (active/closed/returned) + แถวที่ยังไม่ผูกสัญญาแต่เก็บรหัสนี้ไว้
 async function loadPaymentsByCode(token, branchId, code) {
-  const contracts = await supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code)}&branch_id=eq.${encodeURIComponent(branchId)}&select=contract_id,device_code`, { token });
-  if (!contracts.length) return { rows: [], total: null, note: "", histories: {} };
+  const order = "order=payment_date.desc,payment_id.desc";
+  const [contracts, unlinked] = await Promise.all([
+    supabaseRest(`contracts?device_code=eq.${encodeURIComponent(code)}&branch_id=eq.${encodeURIComponent(branchId)}&select=contract_id,device_code`, { token }),
+    fetchAllPaged(`payments?contract_id=is.null&device_code=eq.${encodeURIComponent(code)}&select=${WR_COLS}&${order}`, token),
+  ]);
   const byId = Object.fromEntries(contracts.map((c) => [c.contract_id, c]));
-  const ids = contracts.map((c) => c.contract_id).join(",");
-  const all = await fetchAllPaged(`payments?contract_id=in.(${ids})&select=${WR_COLS}&order=payment_date.desc,payment_id.desc`, token);
+  const linked = contracts.length
+    ? await fetchAllPaged(`payments?contract_id=in.(${contracts.map((c) => c.contract_id).join(",")})&select=${WR_COLS}&${order}`, token)
+    : [];
   const histories = {};
-  for (const h of all) { (histories[h.contract_id] = histories[h.contract_id] || []).push(h); }
-  return { rows: all.map((r) => ({ ...r, contracts: byId[r.contract_id] })), total: null, note: "", histories };
+  for (const h of linked) { (histories[h.contract_id] = histories[h.contract_id] || []).push(h); }
+  const rows = sortNewestFirst([...linked.map((r) => ({ ...r, contracts: byId[r.contract_id] })), ...unlinked.map((r) => ({ ...r, contracts: null }))]);
+  return { rows, total: null, unlinkedTotal: null, note: "", histories };
 }
 
 // แปลงแถว payments เป็นแถวแสดงผลแบบชีท Working Reference เดิม
@@ -1500,7 +1626,7 @@ function deriveRefRows(rows, histories) {
     const passed = periodsCompletedFromPayment(r);
     const [y, m, d] = String(r.payment_date || "").split("-").map(Number);
     let normal = "", repeat = "";
-    if (passed !== null) {
+    if (passed !== null && r.contract_id !== null && r.contract_id !== undefined) {
       const st = statsFor(r.contract_id);
       const full = (Number(r.amount) || 0) + (st.partial[n] || 0);
       normal = full;
@@ -1508,7 +1634,7 @@ function deriveRefRows(rows, histories) {
     }
     return {
       key: r.payment_id,
-      code: r.contracts?.device_code || "—",
+      code: r.contracts?.device_code || r.device_code || "—",
       label: r.payment_type ? `${n}(${r.payment_type})` : String(n),
       amount: Number(r.amount) || 0,
       plainNo: r.payment_type ? "" : n,
@@ -1524,6 +1650,7 @@ function WRSearchTab({ t, token, branchId }) {
   const [query, setQuery] = useState("");
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(null);
+  const [unlinkedTotal, setUnlinkedTotal] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
@@ -1542,6 +1669,7 @@ function WRSearchTab({ t, token, branchId }) {
         if (myReq !== reqId.current) return;
         setRows(deriveRefRows(res.rows, hist));
         setTotal(res.total ?? null);
+        setUnlinkedTotal(res.unlinkedTotal ?? null);
         setNote(res.note || "");
       } catch (e) {
         if (myReq === reqId.current) { setErr(e.message); setRows([]); setNote(""); }
@@ -1600,7 +1728,7 @@ function WRSearchTab({ t, token, branchId }) {
       <div style={{ fontSize: 12.5, color: t.ink3, marginTop: 12 }}>
         {q
           ? (loading ? "กำลังค้นหา..." : `พบ ${rows.length.toLocaleString()} แถวของรหัส "${q}"`)
-          : `${total !== null ? `ทั้งหมด ${total.toLocaleString()} แถว — ` : ""}พิมพ์รหัสลูกค้าให้ตรงเป๊ะเพื่อค้นหา (แสดง ${WR_LATEST_LIMIT} แถวล่าสุด)`}
+          : `${total !== null ? `ทั้งหมด ${total.toLocaleString()} แถว${unlinkedTotal ? ` (รวม ${unlinkedTotal.toLocaleString()} แถวที่ยังไม่ผูกสัญญา)` : ""} — ` : ""}พิมพ์รหัสลูกค้าให้ตรงเป๊ะเพื่อค้นหา (แสดง ${WR_LATEST_LIMIT} แถวล่าสุด)`}
       </div>
     </Card>
   );
@@ -2305,12 +2433,15 @@ function CheckPage() {
   useEffect(() => { try { localStorage.setItem("bg_glass_opacity", String(glassOpacity)); } catch {} }, [glassOpacity]);
   useEffect(() => { try { localStorage.setItem("bg_image_url", bgImageUrl || ""); } catch {} }, [bgImageUrl]);
   const t = bgStyle === "glass" ? applyGlass(THEME[mode], glassOpacity, mode) : THEME[mode];
-  const [active, setActive] = useState("check");
+  const [active, setActive] = useState(readInitialPage);
 
   // ---------- auth state ----------
   const [session, setSession] = useState(null); // {access_token, user}
   const [profile, setProfile] = useState(null); // แถวจากตาราง users ของคนที่ login อยู่
   const [profileLoading, setProfileLoading] = useState(false);
+  const [authChecking, setAuthChecking] = useState(() => !!readStoredSession()); // กำลังกู้ session เดิมตอนเปิดหน้า — กันหน้า login แวบขึ้นมาก่อน
+  const sessionRef = useRef(null);
+  useEffect(() => { sessionRef.current = session; }, [session]);
 
   const loadProfile = useCallback(async (token, userId) => {
     setProfileLoading(true);
@@ -2325,13 +2456,72 @@ function CheckPage() {
   }, []);
 
   function handleAuthed(data) {
-    setSession(data);
-    loadProfile(data.access_token, data.user.id);
+    const s = storeSession(data, null);
+    setSession(s);
+    loadProfile(s.access_token, s.user.id);
   }
-  function handleLogout() {
+  function endLocalSession() {
+    clearStoredSession();
     setSession(null);
     setProfile(null);
   }
+  function handleLogout() {
+    const tok = session?.access_token;
+    endLocalSession();
+    // เพิกถอน refresh token ของ session นี้ฝั่งเซิร์ฟเวอร์ด้วย (scope=local = เฉพาะเครื่องนี้ ไม่เตะเครื่องอื่นของบัญชีเดียวกัน)
+    if (tok) fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, { method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${tok}` } }).catch(() => {});
+  }
+
+  // เปิดหน้า/รีเฟรช: กู้ session ที่เก็บไว้ (ถ้าโทเคนใกล้หมดอายุให้ต่ออายุก่อน) แทนการเด้งไปหน้า login
+  useEffect(() => {
+    const stored = readStoredSession();
+    if (!stored) return;
+    (async () => {
+      try {
+        const s = stored.expires_at > nowSec() + REFRESH_MARGIN_SEC ? stored : await refreshSession(stored);
+        handleAuthed(s);
+      } catch (e) {
+        if (e.fatal) clearStoredSession();                    // refresh token ใช้ไม่ได้แล้ว ต้องล็อกอินใหม่
+        else if (stored.expires_at > nowSec()) handleAuthed(stored); // เน็ตสะดุดแต่โทเคนยังไม่หมดอายุ ใช้ต่อไปก่อน
+      } finally { setAuthChecking(false); }
+    })();
+  }, []);
+
+  // ต่ออายุโทเคนอัตโนมัติก่อนหมดอายุ — เช็คทุก 30 วิ + ตอนกลับมาเปิดแท็บ/โฟกัสหน้าต่าง (เบราว์เซอร์ชะลอ timer ของแท็บที่ซ่อนอยู่)
+  const isAuthed = !!session;
+  useEffect(() => {
+    if (!isAuthed) return;
+    const check = async () => {
+      const cur = sessionRef.current;
+      if (!cur || cur.expires_at > nowSec() + REFRESH_MARGIN_SEC) return;
+      try {
+        const next = await refreshSession(cur);
+        setSession((prev) => (prev && prev.access_token !== next.access_token ? { ...next, user: next.user || prev.user } : prev));
+      } catch (e) { if (e.fatal) endLocalSession(); }
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    const id = setInterval(check, 30000);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", check);
+    check();
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener("focus", check); };
+  }, [isAuthed]);
+
+  // ซิงก์ session ข้ามแท็บ: อีกแท็บล็อกอิน/ออกจากระบบ/ต่ออายุโทเคน แท็บนี้ตามทันทีโดยไม่ต้องรีเฟรช
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== SESSION_KEY) return;
+      const cur = sessionRef.current;
+      if (!e.newValue) { if (cur) { setSession(null); setProfile(null); } return; }
+      let s; try { s = JSON.parse(e.newValue); } catch { return; }
+      if (!s?.access_token || !s.user?.id) return;
+      if (!cur) { handleAuthed(s); return; }
+      if (s.user.id !== cur.user.id) { location.reload(); return; }
+      setSession((prev) => (prev && prev.access_token !== s.access_token ? s : prev));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // ดึงโหมดสว่าง/มืดที่บัญชีนี้ตั้งไว้ล่าสุดมาใช้ทันทีที่โปรไฟล์โหลดเสร็จ (ผูกกับบัญชี ต่างจาก
   // รูปแบบพื้นหลัง/กระจกฝ้าที่ผูกไว้กับเครื่อง) — คีย์ effect ด้วย user_id เพื่อดึงแค่ครั้งเดียวตอน
@@ -2349,29 +2539,73 @@ function CheckPage() {
     }
   }
 
-  const LOCAL_KEY = "checkpage_rows_v1";
-  const [rows, setRows] = useState(() => {
-    // เก็บรายการที่ตรวจไว้ในเครื่อง (localStorage) ให้ยังอยู่ต่อแม้รีเฟรชหน้า/ปิดแท็บ จนกว่าจะ
-    // กด "ล้างรายการทั้งหมด" เอง — ใช้ localStorage ได้ปกติเพราะไฟล์นี้เป็นเว็บเพจจริงที่โฮสต์เอง
-    // (ไม่ใช่อาร์ติแฟกต์ในแชทที่ห้ามใช้ browser storage)
-    try {
-      const saved = localStorage.getItem(LOCAL_KEY);
-      return saved ? JSON.parse(saved) : [];
-    } catch { return []; }
-  });
+  // เก็บรายการที่ตรวจไว้ในเครื่อง (localStorage) แยกตามสาขา ให้ยังอยู่ต่อแม้รีเฟรชหน้า/ปิดแท็บ จนกว่าจะ
+  // กด "ล้างรายการทั้งหมด" เอง — ใช้ localStorage ได้ปกติเพราะไฟล์นี้เป็นเว็บเพจจริงที่โฮสต์เอง
+  // (ไม่ใช่อาร์ติแฟกต์ในแชทที่ห้ามใช้ browser storage)
+  const [rows, setRows] = useState(() => loadRows(readInitialBranch()));
+  const rowsBranchRef = useRef(readInitialBranch()); // สาขาที่รายการใน rows ตอนนี้เป็นของ
   const [form, setForm] = useState({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
   const [showExtra, setShowExtra] = useState(false);
   const [search, setSearch] = useState("");
   const [branchList, setBranchList] = useState([]);
-  const [branchId, setBranchId] = useState("");
+  const [branchId, setBranchId] = useState(readInitialBranch);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [checkDate, setCheckDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const nextId = useRef(rows.reduce((m, r) => Math.max(m, r.id || 0), 0) + 1);
   const periodRef = useRef(null);
   const amountRef = useRef(null);
 
   useEffect(() => {
-    try { localStorage.setItem(LOCAL_KEY, JSON.stringify(rows)); } catch {}
+    const b = rowsBranchRef.current;
+    if (!b) return;
+    try {
+      if (rows.length === 0 && !localStorage.getItem(rowsKey(b))) return; // ยังไม่เคยมีรายการ ไม่ต้องสร้างคีย์เปล่า
+      localStorage.setItem(rowsKey(b), JSON.stringify(rows));
+    } catch {}
   }, [rows]);
+
+  // เปลี่ยนสาขา = สลับไปรายการตรวจของสาขานั้น (แท็บที่เปิดคนละสาขาจึงไม่เขียนทับกัน)
+  useEffect(() => {
+    if (!branchId || rowsBranchRef.current === branchId) return;
+    rowsBranchRef.current = branchId;
+    setRows(loadRows(branchId));
+  }, [branchId]);
+
+  // ซิงก์รายการที่กำลังตรวจข้ามแท็บแบบเรียลไทม์: แท็บอื่นเปิดสาขาเดียวกันแล้วเพิ่ม/ลบ/ล้างรายการ
+  // แท็บนี้เห็นทันทีโดยไม่ต้องรีเฟรช ฟังจาก "ประกาศเหตุการณ์" (ไม่ใช่สแนปช็อต) เพื่อให้ผลของสองแท็บ
+  // "รวมกัน" ได้แม้กดเพิ่มรายการคนละแถวพร้อมกันเป๊ะๆ แทนที่แท็บหนึ่งจะทับรายการของอีกแท็บทิ้งไป
+  useEffect(() => {
+    if (!branchId) return;
+    const onStorage = (e) => {
+      if (e.key !== rowsOpKey(branchId) || !e.newValue) return;
+      let op; try { op = JSON.parse(e.newValue); } catch { return; }
+      if (op.tabId === TAB_ID) return; // กันเหตุการณ์ของแท็บตัวเอง (ปกติเบราว์เซอร์ไม่ยิงอยู่แล้ว กันไว้อีกชั้น)
+      if (op.type === "add") setRows((prev) => (prev.some((r) => r.id === op.row.id) ? prev : [...prev, op.row]));
+      else if (op.type === "remove") setRows((prev) => prev.filter((r) => r.id !== op.id));
+      else if (op.type === "clear") setRows([]);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [branchId]);
+
+  // ผูกสาขา+หน้าที่เปิดอยู่กับ URL (?branch=...&page=...) — รีเฟรชแล้วอยู่ที่เดิม บุ๊กมาร์กได้ และแต่ละแท็บถือสาขาของตัวเอง
+  useEffect(() => {
+    if (!session) return;
+    try { history.replaceState(null, "", buildPageUrl(branchId, active)); } catch {}
+    if (branchId) { try { localStorage.setItem("last_branch", branchId); } catch {} }
+  }, [session, branchId, active]);
+
+  // ชื่อแท็บเบราว์เซอร์ขึ้นชื่อสาขาก่อน เปิดหลายแท็บแล้วแยกออกทันที
+  const branchName = branchList.find((b) => b.branch_id === branchId)?.branch_name || "";
+  useEffect(() => {
+    document.title = session && branchName ? `${branchName} · ระบบตรวจสอบค่างวด` : "ระบบตรวจสอบค่างวด";
+  }, [session, branchName]);
+
+  useEffect(() => {
+    if (!branchMenuOpen) return;
+    const close = (e) => { if (!e.target.closest?.("[data-branch-menu]")) setBranchMenuOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [branchMenuOpen]);
 
   // โหลดรายชื่อสาขาจริงจาก DB แทนลิสต์ hardcode เดิม — แอดมินเห็นทุกสาขาที่เปิดใช้งาน
   // ส่วนพนักงานทั่วไปเห็นเฉพาะสาขาที่ถูกมอบหมายผ่าน user_branches (หน้า Admin)
@@ -2406,14 +2640,20 @@ function CheckPage() {
   function addRow(e) {
     e?.preventDefault();
     if (!form.code.trim()) return;
-    setRows((prev) => [...prev, { id: nextId.current++, ...form }]);
+    const row = { id: makeRowId(), ...form };
+    setRows((prev) => [...prev, row]);
+    broadcastRowOp(branchId, { type: "add", row });
     setForm({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
     document.getElementById("code-input")?.focus();
   }
-  function removeRow(id) { setRows((prev) => prev.filter((r) => r.id !== id)); }
+  function removeRow(id) {
+    setRows((prev) => prev.filter((r) => r.id !== id));
+    broadcastRowOp(branchId, { type: "remove", id });
+  }
   function clearAll() {
     setRows([]);
-    try { localStorage.removeItem(LOCAL_KEY); } catch {}
+    broadcastRowOp(branchId, { type: "clear" });
+    try { localStorage.removeItem(rowsKey(rowsBranchRef.current)); } catch {}
   }
   function handlePasteCode(e) {
     const text = e.clipboardData.getData("text");
@@ -2433,6 +2673,15 @@ function CheckPage() {
   const label = { fontSize: 12, color: t.ink2, marginBottom: 5, display: "block", fontWeight: 500 };
 
   // ---------- ด่านตรวจสิทธิ์ก่อนเข้าเนื้อหาจริง ----------
+  if (authChecking) {
+    return (
+      <div style={{ minHeight: "100vh", background: t.bg, color: t.ink2, fontFamily: "'IBM Plex Sans Thai', sans-serif", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5 }}>
+        <style>{FONT_IMPORT}</style>
+        <Loader2 size={16} className="spin" /> กำลังตรวจสอบการเข้าสู่ระบบ...
+        <style>{`.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
   if (!session) {
     return <LoginScreen t={t} mode={mode} setMode={setMode} onAuthed={handleAuthed} />;
   }
@@ -2532,6 +2781,21 @@ function CheckPage() {
                   : branchList.map((b) => <option key={b.branch_id} value={b.branch_id}>{b.branch_name}</option>)}
               </select>
               <ChevronDown size={14} style={{ position: "absolute", right: 10, top: 10, color: t.ink2, pointerEvents: "none" }} />
+            </div>
+            <div style={{ position: "relative" }} data-branch-menu>
+              <button onClick={() => setBranchMenuOpen((o) => !o)} disabled={branchList.length === 0} aria-label="เปิดสาขาในแท็บใหม่" title="เปิดสาขาในแท็บใหม่" style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: branchList.length ? "pointer" : "default", color: t.ink, ...glassSurfaceStyle(t) }}>
+                <ExternalLink size={15} />
+              </button>
+              {branchMenuOpen && (
+                <div style={{ position: "absolute", right: 0, top: 40, zIndex: 20, minWidth: 190, background: t.surface, border: `1px solid ${t.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.18)", padding: 6, ...glassSurfaceStyle(t) }}>
+                  <div style={{ fontSize: 11, color: t.ink3, padding: "4px 8px 6px" }}>เปิดสาขาในแท็บใหม่</div>
+                  {branchList.map((b) => (
+                    <a key={b.branch_id} href={buildPageUrl(b.branch_id, active)} target="_blank" rel="noopener" onClick={() => setBranchMenuOpen(false)} style={{ display: "block", padding: "8px 10px", borderRadius: 7, color: t.ink, textDecoration: "none", fontSize: 13, fontWeight: b.branch_id === branchId ? 600 : 400 }}>
+                      {b.branch_name}{b.branch_id === branchId ? " (สาขานี้)" : ""}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
             <button style={{ width: 34, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: t.ink, position: "relative", ...glassSurfaceStyle(t) }}>
               <Bell size={15} />
