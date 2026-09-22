@@ -1532,22 +1532,6 @@ async function fetchAllPaged(path, token) {
   return out;
 }
 
-// ประวัติจ่ายทั้งหมดของสัญญาที่เกี่ยวข้อง แยกตาม contract_id (แบ่งก้อนละ 30 สัญญา ยิงขนานกัน)
-async function fetchHistoriesByContract(token, contractIds) {
-  const ids = [...new Set(contractIds.filter((x) => x !== null && x !== undefined))];
-  const chunks = [];
-  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30));
-  const parts = await Promise.all(chunks.map((c) =>
-    fetchAllPaged(`payments?contract_id=in.(${c.join(",")})&select=${WR_COLS}&order=payment_id.asc`, token)
-  ));
-  const by = {};
-  for (const h of parts.flat()) {
-    if (!by[h.contract_id]) by[h.contract_id] = [];
-    by[h.contract_id].push(h);
-  }
-  return by;
-}
-
 // เรียงใหม่สุดก่อน: วันที่จ่ายล่าสุดขึ้นบน (วันเดียวกันเรียง payment_id ใหม่สุดก่อน)
 function sortNewestFirst(rows) {
   return rows.sort((x, y) => (x.payment_date < y.payment_date ? 1 : x.payment_date > y.payment_date ? -1 : y.payment_id - x.payment_id));
@@ -1597,51 +1581,22 @@ async function loadPaymentsByCode(token, branchId, code) {
   const linked = contracts.length
     ? await fetchAllPaged(`payments?contract_id=in.(${contracts.map((c) => c.contract_id).join(",")})&select=${WR_COLS}&${order}`, token)
     : [];
-  const histories = {};
-  for (const h of linked) { (histories[h.contract_id] = histories[h.contract_id] || []).push(h); }
   const rows = sortNewestFirst([...linked.map((r) => ({ ...r, contracts: byId[r.contract_id] })), ...unlinked.map((r) => ({ ...r, contracts: null }))]);
-  return { rows, total: null, unlinkedTotal: null, note: "", histories };
+  return { rows, total: null, unlinkedTotal: null, note: "" };
 }
 
-// แปลงแถว payments เป็นแถวแสดงผลแบบชีท Working Reference เดิม
-// - งวด(ตัวเลข): เลขงวดเฉพาะแถวที่ไม่มีสถานะในวงเล็บ  - งวดที่ผ่านแล้ว: เลขงวดที่นับว่าจ่ายครบ (บางส่วน/สะสม = ว่าง)
-// - ยอดงวดปกติ: ยอดเต็มของงวดนั้น = ยอดแถวนี้ + ยอดบางส่วน/สะสมของงวดเดียวกัน (แถวบางส่วนเว้นว่าง)
-// - จำนวนซ้ำของยอด: นับงวดที่จ่ายครบแล้วของสัญญานี้ (ถึงงวดนี้) ที่ยอดเต็มเท่ากับยอดงวดปกติ
-function deriveRefRows(rows, histories) {
-  const cache = {};
-  const statsFor = (cid) => {
-    if (cache[cid]) return cache[cid];
-    const hist = histories[cid] || [];
-    const partial = {};
-    for (const h of hist) {
-      if (h.payment_type === "สะสม" || h.payment_type === "บางส่วน") partial[h.installment_number] = (partial[h.installment_number] || 0) + (Number(h.amount) || 0);
-    }
-    const completed = hist
-      .filter((h) => periodsCompletedFromPayment(h) !== null)
-      .map((h) => ({ n: h.installment_number, full: (Number(h.amount) || 0) + (partial[h.installment_number] || 0) }));
-    return (cache[cid] = { partial, completed });
-  };
+// แปลงแถว payments เป็นแถวแสดงผลแบบชีท Working Reference เดิม (เฉพาะคอลัมน์ที่ใช้จริง)
+// งวด(ตัวเลข)/ยอดงวดปกติ/จำนวนซ้ำของยอด/งวดที่ผ่านแล้ว/เลขงวด ถูกตัดออกตามคำขอ — ไม่ต้องดึงประวัติทั้งสัญญามาคำนวณอีก
+function deriveRefRows(rows) {
   return rows.map((r) => {
     const n = r.installment_number;
-    const passed = periodsCompletedFromPayment(r);
     const [y, m, d] = String(r.payment_date || "").split("-").map(Number);
-    let normal = "", repeat = "";
-    if (passed !== null && r.contract_id !== null && r.contract_id !== undefined) {
-      const st = statsFor(r.contract_id);
-      const full = (Number(r.amount) || 0) + (st.partial[n] || 0);
-      normal = full;
-      repeat = st.completed.filter((x) => x.n <= n && x.full === full).length;
-    }
     return {
       key: r.payment_id,
       code: r.contracts?.device_code || r.device_code || "—",
       label: r.payment_type ? `${n}(${r.payment_type})` : String(n),
       amount: Number(r.amount) || 0,
-      plainNo: r.payment_type ? "" : n,
-      normal, repeat,
-      passed: passed === null ? "" : passed,
       day: d || "", month: m ? TH_MONTHS[m - 1] : "", year: y ? y + 543 : "",
-      no: n,
     };
   });
 }
@@ -1665,9 +1620,8 @@ function WRSearchTab({ t, token, branchId }) {
       setLoading(true); setErr("");
       try {
         const res = q ? await loadPaymentsByCode(token, branchId, q) : await loadLatestPayments(token, branchId);
-        const hist = res.histories || await fetchHistoriesByContract(token, res.rows.map((r) => r.contract_id));
         if (myReq !== reqId.current) return;
-        setRows(deriveRefRows(res.rows, hist));
+        setRows(deriveRefRows(res.rows));
         setTotal(res.total ?? null);
         setUnlinkedTotal(res.unlinkedTotal ?? null);
         setNote(res.note || "");
@@ -1680,7 +1634,7 @@ function WRSearchTab({ t, token, branchId }) {
     return () => clearTimeout(timer);
   }, [token, branchId, q]);
 
-  const heads = [["รหัสลูกค้า", "left"], ["งวดที่", "left"], ["จำนวนเงิน", "right"], ["งวด(ตัวเลข)", "left"], ["ยอดงวดปกติ", "right"], ["จำนวนซ้ำของยอด", "left"], ["งวดที่ผ่านแล้ว", "left"], ["วันที่", "left"], ["เดือน", "left"], ["พ.ศ.", "left"], ["เลขงวด", "left"]];
+  const heads = [["รหัสลูกค้า", "left"], ["งวดที่", "left"], ["จำนวนเงิน", "right"], ["วันที่", "left"], ["เดือน", "left"], ["พ.ศ.", "left"]];
   const td = { padding: "12px 14px", whiteSpace: "nowrap", borderBottom: `1px solid ${t.border}` };
   const mono = { fontFamily: "'IBM Plex Mono', monospace" };
   const money = (v) => (v === "" ? "" : Number(v).toLocaleString());
@@ -1711,14 +1665,9 @@ function WRSearchTab({ t, token, branchId }) {
                   <td style={td}>{r.code}</td>
                   <td style={td}>{r.label}</td>
                   <td style={{ ...td, ...mono, textAlign: "right" }}>{money(r.amount)}</td>
-                  <td style={td}>{r.plainNo}</td>
-                  <td style={{ ...td, ...mono, textAlign: "right" }}>{money(r.normal)}</td>
-                  <td style={td}>{r.repeat}</td>
-                  <td style={td}>{r.passed}</td>
                   <td style={td}>{r.day}</td>
                   <td style={td}>{r.month}</td>
                   <td style={td}>{r.year}</td>
-                  <td style={td}>{r.no}</td>
                 </tr>
               ))}
             </tbody>
