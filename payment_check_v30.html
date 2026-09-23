@@ -2657,6 +2657,10 @@ function CheckPage() {
   const [rows, setRows] = useState(() => loadRows(readInitialBranch()));
   const rowsBranchRef = useRef(readInitialBranch()); // สาขาที่รายการใน rows ตอนนี้เป็นของ
   const [form, setForm] = useState({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
+  // true = พนักงานเคยพิมพ์ในช่อง "ยอดตามสลิป" เองแล้วสำหรับแถวที่กำลังกรอกอยู่นี้ — พอ touched แล้ว
+  // จะหยุด auto-fill ทับค่าที่พนักงานตั้งใจแก้ไว้เอง (เช่น สลิปจริงมีปัดเศษ/ส่วนลด/ค่าธรรมเนียมธนาคารต่างจากที่คำนวณ)
+  // รีเซ็ตกลับเป็น false ทุกครั้งที่เพิ่มแถวสำเร็จ (เริ่มแถวใหม่ = auto-fill กลับมาทำงานอีกครั้ง)
+  const [slipTouched, setSlipTouched] = useState(false);
   const [showExtra, setShowExtra] = useState(false);
   const [search, setSearch] = useState("");
   const [branchList, setBranchList] = useState([]);
@@ -2665,6 +2669,16 @@ function CheckPage() {
   const [checkDate, setCheckDate] = useState(() => new Date().toISOString().slice(0, 10));
   const periodRef = useRef(null);
   const amountRef = useRef(null);
+
+  // "ยอดตามสลิป" เป็นตัวเช็คไขว้กับยอดที่ระบบคำนวณเอง (ดู sumMoney/slipDiff) จึงต้องยังแก้ไขเองได้เสมอ
+  // ที่นี่แค่เติมค่าเริ่มต้น = จำนวนเงิน+ค่าธรรมเนียม+สะสม ให้ตอนยังไม่ได้แก้ ไม่ใช่ผูกสูตรตายตัว
+  // ถ้าสลิปจริงต่างจากนี้ พนักงานยังต้องแก้เลขให้ตรงเองอยู่ดี (ไม่งั้นเช็คผลต่างจะไม่มีความหมาย)
+  useEffect(() => {
+    if (slipTouched) return;
+    if (!form.amount && !form.fee && !form.cum) return; // ฟอร์มว่างทั้งหมด ไม่ต้องเติมอะไร
+    const sum = (parseFloat(form.amount) || 0) + (parseFloat(form.fee) || 0) + (parseFloat(form.cum) || 0);
+    setForm((f) => (f.slip === String(sum) ? f : { ...f, slip: String(sum) }));
+  }, [form.amount, form.fee, form.cum, slipTouched]);
 
   useEffect(() => {
     const b = rowsBranchRef.current;
@@ -2761,6 +2775,7 @@ function CheckPage() {
     setRows((prev) => [...prev, row]);
     broadcastRowOp(branchId, { type: "add", row });
     setForm({ code: "", period: "", amount: "", fee: "", cum: "", slip: "" });
+    setSlipTouched(false);
     document.getElementById("code-input")?.focus();
   }
   function removeRow(id) {
@@ -2971,7 +2986,7 @@ function CheckPage() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 10 }}>
               <div><label style={label}>ค่าธรรมเนียม</label><input style={input} placeholder="เว้นว่างได้" value={form.fee} onChange={(e) => setForm((f) => ({ ...f, fee: e.target.value }))} /></div>
               <div><label style={label}>สะสม (เดี่ยว)</label><input style={input} placeholder="เว้นว่างได้" value={form.cum} onChange={(e) => setForm((f) => ({ ...f, cum: e.target.value }))} /></div>
-              <div><label style={label}>ยอดตามสลิป</label><input style={input} placeholder="เว้นว่างได้" value={form.slip} onChange={(e) => setForm((f) => ({ ...f, slip: e.target.value }))} /></div>
+              <div><label style={label}>ยอดตามสลิป</label><input style={input} placeholder="เว้นว่างได้" value={form.slip} onChange={(e) => { setSlipTouched(true); setForm((f) => ({ ...f, slip: e.target.value })); }} /></div>
             </div>
           )}
           <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
