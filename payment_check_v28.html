@@ -489,22 +489,56 @@ const TONE_DOT = { ok: "●", warn: "●", bad: "●", info: "●", neutral: "�
 // ก่อนเสมอ — cache ผลค้นหาสัญญา+ประวัติต่อรหัสไว้ใน session เดียวกัน ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว
 function useComputedRows(rows, token, branchId, checkDate, recheckTick) {
   const [results, setResults] = useState({});
+  // มิเรอร์ของ results ไว้อ่านแบบ sync ภายใน effect เอง — results (state) อัปเดตแบบ async ผ่าน React
+  // ทำให้ effect รอบถัดไปที่เริ่มเร็วมาก (เช่น เพิ่มสองแถวรัวๆ ติดกัน) อาจยังอ่านค่าจาก render ก่อนหน้าไม่ทัน
+  const resultsRef = useRef({});
   const contractCache = useRef(new Map());
+  const prevRowsRef = useRef([]);
+  const prevKeyRef = useRef(null);
+
+  function updateResult(id, val) {
+    resultsRef.current = { ...resultsRef.current, [id]: val };
+    setResults(resultsRef.current);
+  }
 
   useEffect(() => {
     if (!token || !branchId) return;
     let cancelled = false;
-    contractCache.current = new Map();
+
+    // บริบทที่กระทบผลตรวจ "ทุกแถว" พร้อมกัน (เปลี่ยนวันที่ตรวจ/สาขา/กดตรวจใหม่ทั้งหมด) — เปลี่ยนแล้วต้องเริ่มใหม่จาก 0
+    const key = `${token}|${branchId}|${checkDate}|${recheckTick}`;
+    const contextChanged = key !== prevKeyRef.current;
+    prevKeyRef.current = key;
+    const prevRows = prevRowsRef.current;
+    prevRowsRef.current = rows;
+
+    // หา index แรกที่ต้องตรวจใหม่/ตรวจต่อ — แถวก่อนหน้านั้นเชื่อผลเดิมได้ ไม่ต้องแตะ (ไม่กะพริบ ไม่ยิงซ้ำ)
+    // เงื่อนไข "เชื่อได้": บริบทไม่เปลี่ยน + ลำดับ id ตรงกับรอบก่อนเป๊ะ (ลำดับมีผลกับการตรวจ "ซ้ำในรายการตรวจ"
+    // ที่อาศัยแถวก่อนหน้าจริง ถ้ามีแถวถูกลบ/แทรกกลางทาง ทุกแถวตั้งแต่จุดนั้นต้องตรวจใหม่หมด) + มีผลตรวจที่ "เสร็จจริง"
+    // ค้างอยู่แล้ว (ไม่ใช่ loading ค้างจาก effect รอบก่อนที่โดนแทรกจนตรวจไม่ทันเสร็จ)
+    let startIdx = 0;
+    if (!contextChanged) {
+      while (
+        startIdx < rows.length &&
+        rows[startIdx].id === prevRows[startIdx]?.id &&
+        resultsRef.current[rows[startIdx].id] !== undefined &&
+        resultsRef.current[rows[startIdx].id].tone !== "loading"
+      ) startIdx++;
+    }
+
+    if (startIdx >= rows.length) return; // ไม่มีอะไรต้องตรวจใหม่เลย (เช่น แค่ลบแถวสุดท้ายทิ้ง)
+    if (contextChanged) contractCache.current = new Map(); // บริบทเปลี่ยน แคชสัญญา/ประวัติเดิมใช้ไม่ได้แล้ว
+
     (async () => {
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i];
-        setResults((prev) => ({ ...prev, [r.id]: { status: "", tone: "loading" } }));
+      for (let i = startIdx; i < rows.length; i++) {
+        if (cancelled) return;
+        updateResult(rows[i].id, { status: "", tone: "loading" });
       }
-      for (let i = 0; i < rows.length; i++) {
+      for (let i = startIdx; i < rows.length; i++) {
         const r = rows[i];
         const res = await checkRowLive(r, rows.slice(0, i), token, branchId, contractCache, checkDate);
         if (cancelled) return;
-        setResults((prev) => ({ ...prev, [r.id]: res }));
+        updateResult(r.id, res);
       }
     })();
     return () => { cancelled = true; };
@@ -2709,11 +2743,16 @@ function CheckPage() {
 
   const [recheckTick, setRecheckTick] = useState(0);
   const computed = useComputedRows(rows, session?.access_token, branchId, checkDate, recheckTick);
-  const filtered = computed.filter((r) => {
+  // ติดเลขลำดับ (seq) ตามลำดับ "ตรวจจริง" ไว้ก่อนกรอง/กลับด้าน — computed ยังเรียงเก่า→ใหม่เหมือนเดิมเสมอ
+  // (ต้องเรียงแบบนี้เพื่อให้ useComputedRows ตรวจ "ซ้ำในรายการตรวจ" ถูกต้อง) ตัวเลข # ในตารางจึงยึดตามนี้
+  // ไม่ใช่ตามตำแหน่งที่แสดงผล ส่วน displayRows คือลำดับที่เอาไปเรนเดอร์จริง (ล่าสุดขึ้นก่อน)
+  const numberedComputed = computed.map((r, i) => ({ ...r, seq: i + 1 }));
+  const filtered = numberedComputed.filter((r) => {
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
     return r.code.toLowerCase().includes(q) || r.period.toLowerCase().includes(q);
   });
+  const displayRows = [...filtered].reverse();
 
   function addRow(e) {
     e?.preventDefault();
@@ -2966,9 +3005,9 @@ function CheckPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r, idx) => (
+                {displayRows.map((r) => (
                   <tr key={r.id} style={{ borderTop: `1px solid ${t.border}`, background: r.result.tone === "bad" ? t.badSoft : "transparent" }}>
-                    <td style={{ padding: "10px 14px", color: t.ink3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{idx + 1}</td>
+                    <td style={{ padding: "10px 14px", color: t.ink3, fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5 }}>{r.seq}</td>
                     <td style={{ padding: "10px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.code}</td>
                     <td style={{ padding: "10px 14px", fontFamily: "'IBM Plex Mono', monospace" }}>{r.period}</td>
                     <td style={{ padding: "10px 14px", textAlign: "right", fontFamily: "'IBM Plex Mono', monospace" }}>{r.amount ? Number(r.amount).toLocaleString() : "—"}</td>
