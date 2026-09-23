@@ -1508,12 +1508,15 @@ const WR_LATEST_LIMIT = 200;
 const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
 const WR_COLS = "payment_id,contract_id,installment_number,payment_type,amount,payment_date,device_code";
 
-// นับจำนวนแถวทั้งหมดของ query (ไม่โหลดข้อมูลมาจริง) — ล้มเหลวได้เงียบๆ เพราะเป็นแค่ตัวเลขประกอบท้ายตาราง
+// นับจำนวนแถวทั้งหมดของ query (ไม่โหลดข้อมูลมาจริง) — ใช้ count=estimated (อ่านจากสถิติของ Postgres ตอบเกือบ
+// ทันที) แทน count=exact (ต้องสแกนนับจริงทั้งตาราง/ทั้งผลลัพธ์ที่ join แล้ว ช้ามากเมื่อข้อมูลเยอะขึ้น) เพราะ
+// ตัวเลขนี้ใช้แค่โชว์ประกอบท้ายตาราง ความแม่นยำระดับ "ประมาณ" เพียงพอ ไม่คุ้มจะแลกกับความเร็วทั้งหน้า
+// ล้มเหลวได้เงียบๆ เช่นกัน
 async function supabaseCount(path, token) {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
       method: "HEAD",
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, Prefer: "count=exact" },
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}`, Prefer: "count=estimated" },
     });
     const m = /\/(\d+)$/.exec(res.headers.get("content-range") || "");
     return m ? Number(m[1]) : null;
@@ -1544,30 +1547,37 @@ function sortNewestFirst(rows) {
 async function loadLatestPayments(token, branchId) {
   const br = encodeURIComponent(branchId);
   const order = "order=payment_date.desc,payment_id.desc";
-  const [unlinked, unlinkedTotal] = await Promise.all([
+  let linked, note = "";
+  const [unlinked] = await Promise.all([
     supabaseRest(`payments?select=${WR_COLS}&contract_id=is.null&${order}&limit=${WR_LATEST_LIMIT}`, { token }),
+    (async () => {
+      try {
+        linked = await supabaseRest(`payments?select=${WR_COLS},contracts!inner(device_code,branch_id)&contracts.branch_id=eq.${br}&${order}&limit=${WR_LATEST_LIMIT}`, { token });
+      } catch (e) {
+        // ไม่มี foreign key payments→contracts ใน DB จะ embed ไม่ได้ — ถอยไปดึงแยก 2 ขั้นแล้วกรองสาขาฝั่งเบราว์เซอร์แทน
+        if (!/relationship|schema cache/i.test(e.message || "")) throw e;
+        const all = await supabaseRest(`payments?select=${WR_COLS}&contract_id=not.is.null&${order}&limit=${WR_LATEST_LIMIT}`, { token });
+        const ids = [...new Set(all.map((r) => r.contract_id))];
+        const cs = ids.length ? await supabaseRest(`contracts?contract_id=in.(${ids.join(",")})&select=contract_id,device_code,branch_id`, { token }) : [];
+        const byId = Object.fromEntries(cs.map((c) => [c.contract_id, c]));
+        linked = all.filter((r) => byId[r.contract_id]?.branch_id === branchId).map((r) => ({ ...r, contracts: byId[r.contract_id] }));
+        note = `ดึง ${WR_LATEST_LIMIT} แถวล่าสุดของทุกสาขามากรองเอง จึงอาจเหลือน้อยกว่า ${WR_LATEST_LIMIT} แถว`;
+      }
+    })(),
+  ]);
+  const rows = sortNewestFirst([...linked, ...unlinked.map((r) => ({ ...r, contracts: null }))]).slice(0, WR_LATEST_LIMIT);
+  return { rows, note };
+}
+
+// จำนวนแถวทั้งหมด (ประมาณ) — แยกจาก loadLatestPayments เพราะเป็นคนละความเร่งด่วน: แถวจริงต้องโชว์ให้ไวที่สุด
+// ส่วนตัวเลขรวมโชว์ช้ากว่าสักครู่ได้ ไม่ควรทำให้ตารางทั้งหน้าค้างรอเลขนี้
+async function fetchLatestCounts(token, branchId) {
+  const br = encodeURIComponent(branchId);
+  const [total, unlinkedTotal] = await Promise.all([
+    supabaseCount(`payments?select=payment_id,contracts!inner(branch_id)&contracts.branch_id=eq.${br}`, token),
     supabaseCount(`payments?select=payment_id&contract_id=is.null`, token),
   ]);
-  let linked, linkedTotal, note = "";
-  try {
-    [linked, linkedTotal] = await Promise.all([
-      supabaseRest(`payments?select=${WR_COLS},contracts!inner(device_code,branch_id)&contracts.branch_id=eq.${br}&${order}&limit=${WR_LATEST_LIMIT}`, { token }),
-      supabaseCount(`payments?select=payment_id,contracts!inner(branch_id)&contracts.branch_id=eq.${br}`, token),
-    ]);
-  } catch (e) {
-    // ไม่มี foreign key payments→contracts ใน DB จะ embed ไม่ได้ — ถอยไปดึงแยก 2 ขั้นแล้วกรองสาขาฝั่งเบราว์เซอร์แทน
-    if (!/relationship|schema cache/i.test(e.message || "")) throw e;
-    const all = await supabaseRest(`payments?select=${WR_COLS}&contract_id=not.is.null&${order}&limit=${WR_LATEST_LIMIT}`, { token });
-    const ids = [...new Set(all.map((r) => r.contract_id))];
-    const cs = ids.length ? await supabaseRest(`contracts?contract_id=in.(${ids.join(",")})&select=contract_id,device_code,branch_id`, { token }) : [];
-    const byId = Object.fromEntries(cs.map((c) => [c.contract_id, c]));
-    linked = all.filter((r) => byId[r.contract_id]?.branch_id === branchId).map((r) => ({ ...r, contracts: byId[r.contract_id] }));
-    linkedTotal = null;
-    note = `ดึง ${WR_LATEST_LIMIT} แถวล่าสุดของทุกสาขามากรองเอง จึงอาจเหลือน้อยกว่า ${WR_LATEST_LIMIT} แถว`;
-  }
-  const rows = sortNewestFirst([...linked, ...unlinked.map((r) => ({ ...r, contracts: null }))]).slice(0, WR_LATEST_LIMIT);
-  const total = linkedTotal !== null && unlinkedTotal !== null ? linkedTotal + unlinkedTotal : null;
-  return { rows, total, unlinkedTotal, note };
+  return { total: total !== null && unlinkedTotal !== null ? total + unlinkedTotal : null, unlinkedTotal };
 }
 
 // ทุกแถวของรหัสนี้ (ตรงเป๊ะ) — สัญญาของรหัสนี้ในสาขาที่เลือก (active/closed/returned) + แถวที่ยังไม่ผูกสัญญาแต่เก็บรหัสนี้ไว้
@@ -1622,9 +1632,15 @@ function WRSearchTab({ t, token, branchId }) {
         const res = q ? await loadPaymentsByCode(token, branchId, q) : await loadLatestPayments(token, branchId);
         if (myReq !== reqId.current) return;
         setRows(deriveRefRows(res.rows));
-        setTotal(res.total ?? null);
-        setUnlinkedTotal(res.unlinkedTotal ?? null);
         setNote(res.note || "");
+        setTotal(null); setUnlinkedTotal(null); // เคลียร์เลขรวมของคำค้นก่อนหน้าไว้ก่อน
+        if (!q) {
+          // นับจำนวนรวม (ประมาณ) แยกเป็นงานพื้นหลัง ไม่ await ตรงนี้ เพื่อไม่ให้ตารางรอเลขนี้ก่อนแสดงผล
+          fetchLatestCounts(token, branchId).then((c) => {
+            if (myReq !== reqId.current) return;
+            setTotal(c.total); setUnlinkedTotal(c.unlinkedTotal);
+          }).catch(() => {});
+        }
       } catch (e) {
         if (myReq === reqId.current) { setErr(e.message); setRows([]); setNote(""); }
       } finally {
@@ -1685,6 +1701,10 @@ function WRSearchTab({ t, token, branchId }) {
 
 function WRPage({ t, token, branchId, computed, onContractCreated }) {
   const [tab, setTab] = useState("search");
+  // เช่นเดียวกับ nav หลัก: จำแท็บย่อยที่เคยเปิดแล้ว ซ่อนด้วย CSS แทนการ unmount ตอนสลับออก
+  // กันไม่ให้ WRSearchTab (ซึ่งมี state ผลค้นหาของตัวเอง) โดนทำลายทิ้งแล้วต้องค้นหาใหม่ทุกครั้งที่สลับแท็บย่อยไปมา
+  const [visitedSubTabs, setVisitedSubTabs] = useState(() => new Set(["search"]));
+  useEffect(() => { setVisitedSubTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab))); }, [tab]);
   const tabBtn = (key, lbl) => (
     <button onClick={() => setTab(key)} style={{ background: tab === key ? t.surface : "transparent", color: tab === key ? t.ink : t.ink2, border: "none", borderRadius: 9, padding: "9px 16px", fontSize: 13, fontWeight: tab === key ? 600 : 500, cursor: "pointer", fontFamily: "inherit", boxShadow: tab === key ? t.shadow : "none" }}>
       {lbl}
@@ -1702,18 +1722,34 @@ function WRPage({ t, token, branchId, computed, onContractCreated }) {
         {tabBtn("close", "ย้ายลูกค้าคืนเครื่อง")}
       </div>
 
-      {tab === "search" && <WRSearchTab t={t} token={token} branchId={branchId} />}
-
-      {tab === "import" && (
-        <>
-          <ImportPasteCard t={t} token={token} branchId={branchId} />
-          <BackfillCompareCard t={t} token={token} branchId={branchId} computed={computed} />
-        </>
+      {visitedSubTabs.has("search") && (
+        <div style={{ display: tab === "search" ? "block" : "none" }}>
+          <WRSearchTab t={t} token={token} branchId={branchId} />
+        </div>
       )}
 
-      {tab === "newcontract" && <NewContractCard t={t} token={token} branchId={branchId} onCreated={onContractCreated} />}
-      {tab === "backfill" && <ContractBackfillPage t={t} token={token} branchId={branchId} onContractCreated={onContractCreated} />}
-      {tab === "close" && <CloseContractCard t={t} token={token} branchId={branchId} />}
+      {visitedSubTabs.has("import") && (
+        <div style={{ display: tab === "import" ? "block" : "none" }}>
+          <ImportPasteCard t={t} token={token} branchId={branchId} />
+          <BackfillCompareCard t={t} token={token} branchId={branchId} computed={computed} />
+        </div>
+      )}
+
+      {visitedSubTabs.has("newcontract") && (
+        <div style={{ display: tab === "newcontract" ? "block" : "none" }}>
+          <NewContractCard t={t} token={token} branchId={branchId} onCreated={onContractCreated} />
+        </div>
+      )}
+      {visitedSubTabs.has("backfill") && (
+        <div style={{ display: tab === "backfill" ? "block" : "none" }}>
+          <ContractBackfillPage t={t} token={token} branchId={branchId} onContractCreated={onContractCreated} />
+        </div>
+      )}
+      {visitedSubTabs.has("close") && (
+        <div style={{ display: tab === "close" ? "block" : "none" }}>
+          <CloseContractCard t={t} token={token} branchId={branchId} />
+        </div>
+      )}
     </div>
   );
 }
@@ -2383,6 +2419,12 @@ function CheckPage() {
   useEffect(() => { try { localStorage.setItem("bg_image_url", bgImageUrl || ""); } catch {} }, [bgImageUrl]);
   const t = bgStyle === "glass" ? applyGlass(THEME[mode], glassOpacity, mode) : THEME[mode];
   const [active, setActive] = useState(readInitialPage);
+  // หน้าไหนเคยถูกเปิดแล้วบ้าง — ใช้ตัดสินว่าจะ "คงหน้านั้นไว้ในต้นไม้ React" (แค่ซ่อนด้วย CSS) หรือยังไม่ต้องสร้างเลย
+  // เพราะ Dashboard/Working Reference/Archive/ตรวจ+ซ่อมงวด/Admin เป็นคอมโพเนนต์แยกที่มี state และ effect ดึงข้อมูลของตัวเอง
+  // เดิมสลับ nav แล้วโดนทำลายทิ้งทั้งก้อนทุกครั้ง (React unmount), กลับมาใหม่เลยต้องดึงข้อมูล/รีเซ็ตสถานะใหม่หมด
+  // ดูเหมือน "โหลดใหม่" ทั้งที่ไม่มีอะไรเปลี่ยน — ที่นี่แก้ด้วยการซ่อนด้วย display:none แทนการ unmount หลังเปิดครั้งแรก
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set([readInitialPage()]));
+  useEffect(() => { setVisitedTabs((prev) => (prev.has(active) ? prev : new Set(prev).add(active))); }, [active]);
 
   // ---------- auth state ----------
   const [session, setSession] = useState(null); // {access_token, user}
@@ -2867,15 +2909,36 @@ function CheckPage() {
         </>
         )}
 
-        {active === "dashboard" && <DashboardPage t={t} computed={computed} />}
-        {active === "wr" && <WRPage t={t} token={session.access_token} branchId={branchId} computed={computed} onContractCreated={() => setRecheckTick((n) => n + 1)} />}
-        {active === "archive" && <ArchivePage t={t} token={session.access_token} branchId={branchId} />}
-        {active === "fix" && <FixPage t={t} token={session.access_token} branchId={branchId} />}
-        {active === "settings" && <AccountSettingsPage t={t} token={session.access_token} profile={profile} onSaved={(updated) => setProfile(updated)} bgStyle={bgStyle} setBgStyle={setBgStyle} glassOpacity={glassOpacity} setGlassOpacity={setGlassOpacity} bgImageUrl={bgImageUrl} setBgImageUrl={setBgImageUrl} />}
-        {active === "admin" && (
-          profile.is_admin
-            ? <AdminPage t={t} token={session.access_token} />
-            : <div style={{ color: t.ink3, fontSize: 13.5 }}>หน้านี้สำหรับแอดมินเท่านั้น</div>
+        {visitedTabs.has("dashboard") && (
+          <div style={{ display: active === "dashboard" ? "block" : "none" }}>
+            <DashboardPage t={t} computed={computed} />
+          </div>
+        )}
+        {visitedTabs.has("wr") && (
+          <div style={{ display: active === "wr" ? "block" : "none" }}>
+            <WRPage t={t} token={session.access_token} branchId={branchId} computed={computed} onContractCreated={() => setRecheckTick((n) => n + 1)} />
+          </div>
+        )}
+        {visitedTabs.has("archive") && (
+          <div style={{ display: active === "archive" ? "block" : "none" }}>
+            <ArchivePage t={t} token={session.access_token} branchId={branchId} />
+          </div>
+        )}
+        {visitedTabs.has("fix") && (
+          <div style={{ display: active === "fix" ? "block" : "none" }}>
+            <FixPage t={t} token={session.access_token} branchId={branchId} />
+          </div>
+        )}
+        {visitedTabs.has("settings") && (
+          <div style={{ display: active === "settings" ? "block" : "none" }}>
+            <AccountSettingsPage t={t} token={session.access_token} profile={profile} onSaved={(updated) => setProfile(updated)} bgStyle={bgStyle} setBgStyle={setBgStyle} glassOpacity={glassOpacity} setGlassOpacity={setGlassOpacity} bgImageUrl={bgImageUrl} setBgImageUrl={setBgImageUrl} />
+          </div>
+        )}
+        {active === "admin" && !profile.is_admin && <div style={{ color: t.ink3, fontSize: 13.5 }}>หน้านี้สำหรับแอดมินเท่านั้น</div>}
+        {profile.is_admin && visitedTabs.has("admin") && (
+          <div style={{ display: active === "admin" ? "block" : "none" }}>
+            <AdminPage t={t} token={session.access_token} />
+          </div>
         )}
       </main>
 
