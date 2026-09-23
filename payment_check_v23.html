@@ -802,7 +802,9 @@ function toISODate(day, monthIdx, yearBE) {
 
 // สร้าง+บันทึกแถว payment จริง 1 แถว — หา contract_id จากรหัสลูกค้าก่อนเสมอ (ใช้ cache ต่อ session
 // เดียวกับหน้าตรวจสอบ ไม่ต้องยิงซ้ำถ้าเจอรหัสเดิมหลายแถว) เช็คซ้ำก่อน insert ทุกครั้งกันกดซ้ำโดยไม่ตั้งใจ
-async function postPaymentRow(token, branchId, code, period, amount, isoDate, contractCache) {
+// force=true: ข้ามการเช็คซ้ำ แล้วบันทึกไปเลย — ใช้เมื่อพนักงานกดยืนยันเองแล้วว่าเป็นรายการจ่ายจริงอีกครั้ง
+// (เช่น ลูกค้าจ่ายวันเดียวกัน งวดเดียวกัน ยอดเท่ากันจริงๆ สองรอบ) ไม่ใช่การนำเข้าข้อมูลเดิมซ้ำโดยไม่ตั้งใจ
+async function postPaymentRow(token, branchId, code, period, amount, isoDate, contractCache, { force = false } = {}) {
   const p = parsePeriod(period);
   if (!p || !p.fmtOK) return { ok: false, msg: `งวดที่ "${period}" รูปแบบไม่ถูกต้อง` };
   let contract = contractCache.get(code);
@@ -818,11 +820,13 @@ async function postPaymentRow(token, branchId, code, period, amount, isoDate, co
   // และให้ทุกคนที่ login เห็นในหน้า Working Reference > "ลูกค้าที่ยังไม่มีสัญญา" ได้ ไม่ใช่แค่เครื่อง
   // ที่นำเข้าเอง — พอมีคนสร้างสัญญาให้รหัสนี้ทีหลัง แถวนี้จะถูกจับคู่เข้ากับสัญญาใหม่ให้อัตโนมัติ
   if (!contract) {
-    const dupOrphan = await supabaseRest(
-      `payments?contract_id=is.null&device_code=eq.${encodeURIComponent(code)}&installment_number=eq.${installment_number}&amount=eq.${amount}&payment_date=eq.${isoDate}&select=payment_id&limit=1`,
-      { token }
-    );
-    if (dupOrphan.length) return { ok: false, msg: `ซ้ำ — มีแถวรอตรวจสอบของรหัส "${code}" งวดนี้อยู่แล้ว` };
+    if (!force) {
+      const dupOrphan = await supabaseRest(
+        `payments?contract_id=is.null&device_code=eq.${encodeURIComponent(code)}&installment_number=eq.${installment_number}&amount=eq.${amount}&payment_date=eq.${isoDate}&select=payment_id&limit=1`,
+        { token }
+      );
+      if (dupOrphan.length) return { ok: false, msg: `ซ้ำ — มีแถวรอตรวจสอบของรหัส "${code}" งวดนี้อยู่แล้ว` };
+    }
     await supabaseRest("payments", {
       method: "POST", token,
       body: { contract_id: null, device_code: code, installment_number, payment_type, amount, payment_date: isoDate, needs_review: true, review_reason: "ไม่พบรหัสนี้ในตาราง contracts เลย" },
@@ -830,13 +834,15 @@ async function postPaymentRow(token, branchId, code, period, amount, isoDate, co
     return { ok: true, msg: `ไม่พบรหัสลูกค้า "${code}" — บันทึกเป็นรอตรวจสอบไว้แล้ว (ดูที่ Working Reference > ลูกค้าที่ยังไม่มีสัญญา)` };
   }
 
-  const dup = await supabaseRest(
-    `payments?contract_id=eq.${contract.contract_id}&installment_number=eq.${installment_number}&amount=eq.${amount}&payment_date=eq.${isoDate}&select=payment_id&limit=1`,
-    { token }
-  );
-  if (dup.length) return { ok: false, msg: `ซ้ำ — มีแถวนี้อยู่ในฐานข้อมูลแล้ว (contract_id ${contract.contract_id})` };
+  if (!force) {
+    const dup = await supabaseRest(
+      `payments?contract_id=eq.${contract.contract_id}&installment_number=eq.${installment_number}&amount=eq.${amount}&payment_date=eq.${isoDate}&select=payment_id&limit=1`,
+      { token }
+    );
+    if (dup.length) return { ok: false, msg: `ซ้ำ — มีแถวนี้อยู่ในฐานข้อมูลแล้ว (contract_id ${contract.contract_id})` };
+  }
   await supabaseRest("payments", { method: "POST", token, body: { contract_id: contract.contract_id, device_code: code, installment_number, payment_type, amount, payment_date: isoDate } });
-  return { ok: true, msg: `บันทึกแล้ว (contract_id ${contract.contract_id} งวด ${installment_number})` };
+  return { ok: true, msg: `บันทึกแล้ว (contract_id ${contract.contract_id} งวด ${installment_number})${force ? " — ยืนยันว่าไม่ซ้ำแล้ว" : ""}` };
 }
 
 // เทียบแต่ละแถวที่วางมากับฐานข้อมูลจริงก่อนบันทึก — เดิมกดนำเข้าแล้วยิงเข้า DB ทันที ไม่มีขั้นตอน
@@ -878,6 +884,7 @@ async function buildImportPreview(token, branchId, lines, cache) {
 const IMPORT_STATUS_LABEL = {
   new: "ใหม่ — พร้อมบันทึก", no_contract: "ไม่พบสัญญา — จะบันทึกรอตรวจสอบ", exact_dup: "ซ้ำเป๊ะกับของเดิมอยู่แล้ว",
   conflict: "มีของเดิมอยู่ แต่ยอด/ประเภทไม่ตรงกัน", parse_error: "รูปแบบผิด — ข้ามแถวนี้", overwritten: "บันทึกทับของเดิมแล้ว",
+  confirmed_dup: "ยืนยันแล้ว — บันทึกเป็นรายการแยกแล้ว",
 };
 
 function ImportPasteCard({ t, token, branchId }) {
@@ -886,6 +893,8 @@ function ImportPasteCard({ t, token, branchId }) {
   const [comparing, setComparing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [overwritingLine, setOverwritingLine] = useState(null);
+  const [confirmingLine, setConfirmingLine] = useState(null); // เลขบรรทัดที่กำลังยืนยันว่าไม่ซ้ำอยู่ (ฝั่ง preview)
+  const [confirmingCommittedLine, setConfirmingCommittedLine] = useState(null); // เลขบรรทัดที่กำลังยืนยัน (ฝั่งผลบันทึกที่ล้มเหลวเพราะซ้ำ)
   const [committed, setCommitted] = useState(null);
   const input = mkInput(t);
 
@@ -905,8 +914,8 @@ function ImportPasteCard({ t, token, branchId }) {
     for (const item of targets) {
       try {
         const r = await postPaymentRow(token, branchId, item.code, item.period, item.amount, item.isoDate, cache);
-        out.push({ line: item.line, ...r });
-      } catch (e) { out.push({ line: item.line, ok: false, msg: e.message }); }
+        out.push({ line: item.line, code: item.code, period: item.period, amount: item.amount, isoDate: item.isoDate, ...r });
+      } catch (e) { out.push({ line: item.line, code: item.code, period: item.period, amount: item.amount, isoDate: item.isoDate, ok: false, msg: e.message }); }
     }
     setCommitted(out);
     setCommitting(false);
@@ -925,6 +934,36 @@ function ImportPasteCard({ t, token, branchId }) {
       setPreview((prev) => prev.map((p) => (p.line === item.line ? { ...p, overwriteErr: e.message } : p)));
     } finally {
       setOverwritingLine(null);
+    }
+  }
+
+  // พนักงานกดยืนยันว่า "ไม่ใช่การนำเข้าซ้ำโดยไม่ตั้งใจ" แต่เป็นการจ่ายจริงอีกครั้ง (สัญญา+งวด+วันที่+ยอดตรงกันเป๊ะ
+  // ก็เกิดได้จริง เช่น ลูกค้าจ่าย 2 รอบวันเดียวกัน) — บันทึกเป็นแถวใหม่แยกต่างหาก ไม่ใช่การแก้ของเดิม (ต่างจาก overwrite)
+  async function confirmDuplicate(item) {
+    setConfirmingLine(item.line);
+    try {
+      const r = await postPaymentRow(token, branchId, item.code, item.period, item.amount, item.isoDate, new Map(), { force: true });
+      if (r.ok) setPreview((prev) => prev.map((p) => (p.line === item.line ? { ...p, status: "confirmed_dup", msg: undefined } : p)));
+      else setPreview((prev) => prev.map((p) => (p.line === item.line ? { ...p, confirmErr: r.msg } : p)));
+    } catch (e) {
+      setPreview((prev) => prev.map((p) => (p.line === item.line ? { ...p, confirmErr: e.message } : p)));
+    } finally {
+      setConfirmingLine(null);
+    }
+  }
+
+  // เหมือนข้างบน แต่ใช้กับแถวที่ล้มเหลวตอน "บันทึกรายการที่พร้อม" เพราะเจอว่าซ้ำ (เช่น อีกเครื่อง/อีกคนบันทึก
+  // แซงไปก่อนในช่วงที่กำลังเทียบข้อมูลอยู่พอดี) ให้ยืนยันแล้วลองบันทึกแถวนั้นใหม่แบบข้ามการเช็คซ้ำได้เลย ไม่ต้องวางข้อมูลใหม่ทั้งหมด
+  async function confirmDuplicateFromCommitted(item) {
+    setConfirmingCommittedLine(item.line);
+    try {
+      const r = await postPaymentRow(token, branchId, item.code, item.period, item.amount, item.isoDate, new Map(), { force: true });
+      setCommitted((prev) => prev.map((x) => (x.line === item.line ? { ...x, ok: r.ok, msg: r.msg, confirmed: r.ok, confirmErr: r.ok ? undefined : r.msg } : x)));
+      if (r.ok) setPreview((prev) => (prev ? prev.filter((p) => p.line !== item.line) : prev)); // แถวนี้เคยค้างอยู่ในลิสต์ "พร้อมบันทึก" เพราะรอบแรกบันทึกไม่สำเร็จ ตอนนี้สำเร็จแล้วเอาออกด้วย กันบันทึกซ้ำอีกรอบ
+    } catch (e) {
+      setCommitted((prev) => prev.map((x) => (x.line === item.line ? { ...x, confirmErr: e.message } : x)));
+    } finally {
+      setConfirmingCommittedLine(null);
     }
   }
 
@@ -963,6 +1002,15 @@ function ImportPasteCard({ t, token, branchId }) {
                       {p.overwriteErr && <span style={{ color: t.bad }}>{p.overwriteErr}</span>}
                     </div>
                   )}
+                  {p.status === "exact_dup" && (
+                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span style={{ color: t.ink2 }}>มีรายการนี้ในฐานข้อมูลแล้วทุกอย่างตรงกัน (สัญญา+งวด+วันที่+ยอด) — ถ้าลูกค้าจ่ายจริงอีกรอบในวันเดียวกัน (ไม่ใช่วางข้อมูลซ้ำ) กดยืนยันเพื่อบันทึกเป็นรายการแยกได้</span>
+                      <button onClick={() => confirmDuplicate(p)} disabled={confirmingLine === p.line} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: confirmingLine === p.line ? "default" : "pointer", fontFamily: "inherit", opacity: confirmingLine === p.line ? 0.6 : 1 }}>
+                        {confirmingLine === p.line ? "กำลังบันทึก..." : "ยืนยันว่าจ่ายจริงอีกรอบ — บันทึกเพิ่ม"}
+                      </button>
+                      {p.confirmErr && <span style={{ color: t.bad }}>{p.confirmErr}</span>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -977,7 +1025,19 @@ function ImportPasteCard({ t, token, branchId }) {
               <div style={{ fontSize: 13, fontWeight: 600, color: committed.every((r) => r.ok) ? t.ok : t.bad, marginBottom: 6 }}>
                 บันทึกสำเร็จ {committed.filter((r) => r.ok).length} / ล้มเหลว {committed.filter((r) => !r.ok).length}
               </div>
-              {committed.map((r, i) => (<div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>บรรทัด {r.line}: {r.msg}</div>))}
+              {committed.map((r, i) => (
+                <div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>
+                  <div>บรรทัด {r.line}: {r.msg}</div>
+                  {!r.ok && /^ซ้ำ/.test(r.msg || "") && (
+                    <div style={{ marginTop: 3, marginBottom: 4, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <button onClick={() => confirmDuplicateFromCommitted(r)} disabled={confirmingCommittedLine === r.line} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 11.5, fontWeight: 600, cursor: confirmingCommittedLine === r.line ? "default" : "pointer", fontFamily: "inherit", opacity: confirmingCommittedLine === r.line ? 0.6 : 1 }}>
+                        {confirmingCommittedLine === r.line ? "กำลังบันทึก..." : "ยืนยันว่าจ่ายจริงอีกรอบ — บันทึกเพิ่ม"}
+                      </button>
+                      {r.confirmErr && <span style={{ color: t.bad }}>{r.confirmErr}</span>}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -997,6 +1057,7 @@ function BackfillCompareCard({ t, token, branchId, computed }) {
   const [compareResult, setCompareResult] = useState(null);
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState(null);
+  const [confirmingIdx, setConfirmingIdx] = useState(null); // ดัชนีแถวที่กำลังยืนยันว่าไม่ซ้ำอยู่ (ใน commitResult)
   const input = mkInput(t);
 
   function doCompare() {
@@ -1041,6 +1102,20 @@ function BackfillCompareCard({ t, token, branchId, computed }) {
     }
     setCommitResult(out);
     setCommitting(false);
+  }
+
+  // พนักงานกดยืนยันว่าจ่ายจริงอีกรอบ (ไม่ใช่วางข้อมูลซ้ำ) — บันทึกแถวนั้นเพิ่มโดยข้ามการเช็คซ้ำ เหมือนฝั่ง "นำเข้าข้อมูล"
+  async function confirmDuplicate(item, idx) {
+    setConfirmingIdx(idx);
+    try {
+      const isoDate = toISODate(day, monthIdx, yearBE);
+      const r = await postPaymentRow(token, branchId, item.code, item.period, parseFloat(item.amount) || 0, isoDate, new Map(), { force: true });
+      setCommitResult((prev) => prev.map((x, i) => (i === idx ? { ...x, ok: r.ok, msg: r.msg, confirmErr: r.ok ? undefined : r.msg } : x)));
+    } catch (e) {
+      setCommitResult((prev) => prev.map((x, i) => (i === idx ? { ...x, confirmErr: e.message } : x)));
+    } finally {
+      setConfirmingIdx(null);
+    }
   }
 
   const allGood = compareResult && compareResult.mismatched.length === 0 && compareResult.matched.length > 0;
@@ -1095,7 +1170,19 @@ function BackfillCompareCard({ t, token, branchId, computed }) {
               <div style={{ fontSize: 13, fontWeight: 600, color: commitResult.every((r) => r.ok) ? t.ok : t.bad, marginBottom: 6 }}>
                 บันทึกสำเร็จ {commitResult.filter((r) => r.ok).length} / ล้มเหลว {commitResult.filter((r) => !r.ok).length}
               </div>
-              {commitResult.map((r, i) => (<div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>{r.code} / {r.period}: {r.msg}</div>))}
+              {commitResult.map((r, i) => (
+                <div key={i} style={{ fontSize: 12, color: r.ok ? t.ok : t.bad }}>
+                  <div>{r.code} / {r.period}: {r.msg}</div>
+                  {!r.ok && /^ซ้ำ/.test(r.msg || "") && (
+                    <div style={{ marginTop: 3, marginBottom: 4, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <button onClick={() => confirmDuplicate(r, i)} disabled={confirmingIdx === i} style={{ background: t.accent, color: t.accentInk, border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 11.5, fontWeight: 600, cursor: confirmingIdx === i ? "default" : "pointer", fontFamily: "inherit", opacity: confirmingIdx === i ? 0.6 : 1 }}>
+                        {confirmingIdx === i ? "กำลังบันทึก..." : "ยืนยันว่าจ่ายจริงอีกรอบ — บันทึกเพิ่ม"}
+                      </button>
+                      {r.confirmErr && <span style={{ color: t.bad }}>{r.confirmErr}</span>}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </div>
