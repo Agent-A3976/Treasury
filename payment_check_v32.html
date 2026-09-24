@@ -622,6 +622,10 @@ function sumMoney(computed) {
 // รายชื่อสถานะคงที่สำหรับโชว์ pill ครบทุกอัน (แม้ค่าเป็น 0) เหมือนระบบเดิม — ต่างจากเดิมแค่คำที่ใช้
 // ในบางสถานะ เพราะระบบใหม่ไม่มี "ลูกค้าใหม่"/"ยืนยันแล้ว" แยกต่างหากแล้ว (สถานะสัญญาเป็นฟิลด์ตรงๆ)
 const OK_STATUS_LIST = ["ถูก", "รอครบงวด", "ค่าธรรมเนียมเพิ่มเติม", "สะสมเพิ่มเติม", "ค่าธรรมเนียม+สะสมเพิ่มเติม"];
+// สถานะที่ "มีค่างวดจริง" ผูกอยู่ (ต่างจาก OK_STATUS_LIST ที่รวมรายการค่าธรรมเนียม/สะสมเดี่ยวซึ่งไม่มีงวด
+// ไม่ได้บันทึกเข้าประวัติงวดด้วย) ใช้นับเฉพาะตัวเลขหัวข้อ "รายการถูกต้องวันนี้" — ไม่กระทบ pill แถวล่างที่ยัง
+// โชว์ครบทุกสถานะเหมือนเดิม (ยังอยากเห็นว่ามีรายการค่าธรรมเนียม/สะสมเดี่ยวกี่รายการอยู่ แค่ไม่นับรวมในเลขนี้)
+const HAS_INSTALLMENT_STATUS_LIST = ["ถูก", "รอครบงวด"];
 const ISSUE_STATUS_LIST = ["ซ้ำ", "ซ้ำในรายการตรวจ", "ข้ามงวด", "จำนวนเงินไม่ตรง", "ยอดเกิน", "รูปแบบงวดไม่ถูกต้อง", "ไม่พบข้อมูลลูกค้า", "งวดนี้จ่ายครบไปแล้ว", "เกินจำนวนงวดสัญญา"];
 function isIssueStatus(status) {
   return ISSUE_STATUS_LIST.includes(status) || status.startsWith("สัญญานี้ปิดแล้ว");
@@ -675,6 +679,7 @@ function SlipBanner({ t, totals }) {
 function TodaySummary({ t, computed }) {
   const withStatus = computed.filter((r) => r.result.status);
   const okRows = withStatus.filter((r) => !isIssueStatus(r.result.status));
+  const installmentOkRows = okRows.filter((r) => HAS_INSTALLMENT_STATUS_LIST.includes(r.result.status));
   const issueRows = withStatus.filter((r) => isIssueStatus(r.result.status));
   const countBy = (list) => { const c = {}; list.forEach((r) => { c[r.result.status] = (c[r.result.status] || 0) + 1; }); return c; };
   const totals = sumMoney(computed);
@@ -684,7 +689,7 @@ function TodaySummary({ t, computed }) {
       <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 12 }}>ผลการตรวจสอบวันนี้</div>
       <Card t={t} style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 16 }}>
-          <span style={{ fontSize: 28, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{okRows.length}</span>
+          <span style={{ fontSize: 28, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{installmentOkRows.length}</span>
           <span style={{ fontSize: 13, color: t.ink2 }}>รายการถูกต้องวันนี้</span>
         </div>
         <div style={{ fontSize: 12, color: t.ink2, marginBottom: 8, fontWeight: 500 }}>ผลถูกต้อง</div>
