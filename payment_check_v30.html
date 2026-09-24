@@ -2787,9 +2787,26 @@ function CheckPage() {
     broadcastRowOp(branchId, { type: "clear" });
     try { localStorage.removeItem(rowsKey(rowsBranchRef.current)); } catch {}
   }
+  // วางลงช่องรหัส รองรับ 2 รูปแบบ แยกกันด้วยบรรทัดหลังรหัส (บรรทัดแรกเป็นรหัสเสมอทั้งสองแบบ):
+  //  1) Dd/Ss — บรรทัดที่เหลือ "ทุกบรรทัด" ขึ้นต้นด้วย Dd หรือ Ss ตามด้วยตัวเลข (ไม่สนตัวพิมพ์เล็ก/ใหญ่)
+  //     เช่น "21833" + "Dd500" → รหัส 21833, ค่าธรรมเนียม 500 หรือจะมีทั้ง Dd และ Ss มาด้วยกัน
+  //     (3 บรรทัด: รหัส + Dd500 + Ss200) ก็ได้ — Dd→ค่าธรรมเนียม, Ss→สะสม(เดี่ยว) ไม่แตะงวดที่/จำนวนเงินเดิม
+  //  2) รหัส/งวด/ยอด (แบบเดิม) — ใช้เมื่อไม่เข้าเงื่อนไขข้อ 1 และมีอย่างน้อย 3 บรรทัด
   function handlePasteCode(e) {
     const text = e.clipboardData.getData("text");
     const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) return;
+
+    const rest = lines.slice(1);
+    const prefixMatches = rest.map((l) => /^(dd|ss)([\d.]+)$/i.exec(l.replace(/\s+/g, "")));
+    if (prefixMatches.every(Boolean)) {
+      e.preventDefault();
+      const patch = { code: lines[0] };
+      for (const m of prefixMatches) patch[m[1].toLowerCase() === "dd" ? "fee" : "cum"] = m[2];
+      setForm((f) => ({ ...f, ...patch }));
+      return;
+    }
+
     if (lines.length >= 3) {
       e.preventDefault();
       setForm((f) => ({ ...f, code: lines[0], period: lines[1], amount: lines[2] }));
@@ -2953,7 +2970,7 @@ function CheckPage() {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
             <Plus size={16} color={t.accent} />
             <span style={{ fontWeight: 600, fontSize: 14.5 }}>เพิ่มรายการรับชำระเงิน</span>
-            <span style={{ marginLeft: "auto", fontSize: 11.5, color: t.ink3 }}>วาง 3 บรรทัด (รหัส/งวด/ยอด) ลงช่องรหัส ระบบกระจายให้เอง</span>
+            <span style={{ marginLeft: "auto", fontSize: 11.5, color: t.ink3 }}>วาง 3 บรรทัด (รหัส/งวด/ยอด) ลงช่องรหัส ระบบกระจายให้เอง — หรือ รหัส+Dd(ค่าธรรมเนียม)/Ss(สะสม) ก็ได้</span>
           </div>
           <div style={{ marginBottom: 12, maxWidth: 200 }}>
             <label style={label}>วันที่ทำรายการ</label>
