@@ -658,7 +658,10 @@ function jsonp_(url){
 function sleep_(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
 async function apiGet(action, extraParams){
-  const params = new URLSearchParams({ action, secret: API_SECRET, branch: currentBranch, ...(extraParams||{}) });
+  // แนบ sessionToken ของผู้ใช้ที่ login อยู่ไปกับทุกคำขอเสมอ (ถ้ายังไม่ login เช่นตอนหน้า
+  // login/register เองก็จะเป็นค่าว่าง — Backend จะเช็คเองว่า action นั้นๆ ต้องมี session ไหม)
+  // ทำตรงนี้ที่เดียวแทนที่จะไปเติมทีละจุดเรียก กัน "ลืมแนบ" ที่จุดใดจุดหนึ่งในอนาคต
+  const params = new URLSearchParams({ action, secret: API_SECRET, branch: currentBranch, sessionToken: currentUser ? currentUser.sessionToken : '', ...(extraParams||{}) });
   const url = `${API_URL}?${params.toString()}`;
   let lastErr;
   // ลองสูงสุด 4 ครั้ง โดยรอนานขึ้นเรื่อยๆ ก่อนลองใหม่ (2 → 5 → 9 วินาที บวกเวลาสุ่มอีกเล็กน้อย)
@@ -675,6 +678,14 @@ async function apiGet(action, extraParams){
     }catch(e){
       lastErr = e;
       console.warn(`apiGet(${action}) ครั้งที่ ${attempt} ไม่สำเร็จ:`, e.message);
+      // error เรื่องสิทธิ์ (secret ผิด/session หมดอายุ/ไม่มีสิทธิ์สาขานี้) ลองซ้ำไปก็ไม่มีทางสำเร็จ
+      // ต่างจาก error เรื่องเครือข่าย/timeout ที่ลองใหม่แล้วอาจผ่าน — เลิกลองทันทีแทนที่จะเสียเวลา
+      // รอ backoff ครบ 4 รอบ (~17 วิ) แล้วค่อยพาไปหน้า login ใหม่พร้อมข้อความอธิบายชัดเจน กันสับสน
+      // ว่าเป็นปัญหาเชื่อมต่อ (เคสที่พบบ่อยคือ login ซ้ำจากอีกเครื่อง/แท็บ ทำให้ session เดิมหลุดทันที)
+      if(String(e.message||'').startsWith('unauthorized')){
+        if(action !== 'ping') forceReLogin_();
+        throw e;
+      }
       if(attempt < MAX_ATTEMPTS){
         const waitMs = (attempt*attempt*1000) + 1000 + Math.floor(Math.random()*1000);
         await sleep_(waitMs);
@@ -682,6 +693,21 @@ async function apiGet(action, extraParams){
     }
   }
   throw lastErr;
+}
+
+// เรียกเมื่อ session หมดอายุ/ไม่ถูกต้องกลางคัน — เคลียร์ session เก่าแล้วพากลับไปหน้า login
+// พร้อมข้อความอธิบาย (ไม่ใช้ throw เงียบๆ เพราะผู้ใช้จะเห็นแค่ "เชื่อมต่อไม่สำเร็จ" แล้วเข้าใจผิดว่า
+// เป็นปัญหาเน็ต/เซิร์ฟเวอร์เหมือนเดิม ทั้งที่จริงแค่ต้อง login ใหม่)
+let reLoginTriggered_ = false;
+function forceReLogin_(){
+  if(reLoginTriggered_) return; // กันแจ้งซ้ำหลายรอบถ้าหลายคำขอพร้อมพังพร้อมกัน
+  reLoginTriggered_ = true;
+  currentUser = null;
+  clearSession_();
+  document.getElementById('main-wrap').style.display = 'none';
+  document.getElementById('auth-overlay').style.display = '';
+  const errEl = document.getElementById('login-error');
+  if(errEl) errEl.textContent = 'เซสชันหมดอายุ หรือมีการเข้าสู่ระบบบัญชีนี้จากที่อื่น กรุณาเข้าสู่ระบบใหม่';
 }
 
 async function apiPost(action, payload){
@@ -695,11 +721,12 @@ async function apiPost(action, payload){
   // ข้อมูลไม่ถูกเขียนเลย — อันตรายมากสำหรับระบบการเงิน เพราะข้อมูลจ่ายเงินจะหายไปเงียบๆ โดยไม่มี
   // ใครรู้ตัว จึงห้ามใช้ apiPost() ตรงๆ แล้วถือว่าจบ ทุกจุดที่เขียนข้อมูลสำคัญต้องเรียกผ่านฟังก์ชัน
   // "...Verified_" ด้านล่างนี้แทน ซึ่งจะอ่านข้อมูลกลับมาเช็คจริงว่าสิ่งที่ส่งไปมีอยู่ในชีทหรือไม่
+  // แนบ sessionToken เสมอเหมือน apiGet — Backend ใช้ตัวนี้ยืนยันตัวตนจริง ไม่ใช่แค่ secret
   await fetch(API_URL, {
     method: "POST",
     mode: "no-cors",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, secret: API_SECRET, branch: currentBranch, ...(payload||{}) })
+    body: JSON.stringify({ action, secret: API_SECRET, branch: currentBranch, sessionToken: currentUser ? currentUser.sessionToken : '', ...(payload||{}) })
   });
 }
 
