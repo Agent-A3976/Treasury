@@ -755,22 +755,41 @@ function rowMatchesForVerify_(a, b){
 async function commitToWRVerified_(rows, maxAttempts){
   maxAttempts = maxAttempts || 3;
   if(!rows.length) return WR_DATA;
+
+  // เขียนแค่ "ครั้งเดียว" เท่านั้น — commitToWR_ ฝั่ง backend เป็นการต่อท้ายแถวใหม่ (append) ไม่ใช่
+  // upsert เดิมโค้ดนี้ยิงเขียนซ้ำทุกครั้งที่ "ตรวจสอบ" ไม่ผ่าน ซึ่งอันตรายจริง เพราะพบแล้วว่า "ตรวจสอบ
+  // ไม่เจอ" ไม่ได้แปลว่า "ไม่ได้บันทึก" เสมอไป (ระบบตรวจสอบเองมีบั๊ก) ผลคือเคยเกิดข้อมูลซ้ำใน WR จริง
+  // มาแล้ว 2 ครั้ง จึงแยก "เขียน" (ทำครั้งเดียว) ออกจาก "ตรวจสอบซ้ำ" (ทำได้หลายรอบ) อย่างเด็ดขาด
+  await apiPost('commitToWR', {rows});
+
+  let freshWR = null, lastReadErr = null;
   for(let attempt=1; attempt<=maxAttempts; attempt++){
-    await apiPost('commitToWR', {rows});
-    await sleep_(1200); // เผื่อเวลาให้ Google Sheet เขียนเสร็จจริงก่อนไปอ่านกลับมาเช็ค
-    let freshWR;
+    await sleep_(attempt===1 ? 1200 : 1500*attempt); // เผื่อเวลาให้ Google Sheet เขียน+ประมวลผลเสร็จจริง
     try{
       freshWR = normalizeRefRows_(await apiGet('getWR'));
     }catch(readErr){
-      // "ตรวจสอบไม่ได้" ไม่เท่ากับ "รู้ว่าพัง" ห้ามเดาแล้วส่งซ้ำ เดี๋ยวกลายเป็นบันทึกซ้ำสอง
-      throw new Error(`บันทึกไปแล้ว แต่ตรวจสอบผลไม่ได้ (${readErr.message}) — ห้ามกดบันทึกซ้ำ กรุณาเปิดแท็บ Working Reference เช็คด้วยตาก่อนว่าเข้าไปจริงหรือยัง`);
+      lastReadErr = readErr;
+      console.warn(`commitToWR ตรวจสอบผลครั้งที่ ${attempt}: อ่านข้อมูลกลับมาเช็คไม่สำเร็จ (${readErr.message}) — ลองอ่านใหม่ (ไม่ได้ส่งบันทึกซ้ำ)`);
+      continue;
     }
     const allFound = rows.every(row => freshWR.some(r => rowMatchesForVerify_(r, row)));
     if(allFound) return freshWR;
-    console.warn(`commitToWR ครั้งที่ ${attempt}: เช็คแล้วไม่พบแถวที่บันทึกไปจริงในชีท — ลองส่งใหม่ (ปลอดภัย เพราะยืนยันแล้วว่ายังไม่เคยเข้าชีทจริง)`);
-    if(attempt<maxAttempts) await sleep_(1500*attempt);
+    console.warn(`commitToWR ตรวจสอบผลครั้งที่ ${attempt}: อ่านกลับมาแล้วแต่ยังจับคู่แถวไม่ครบ — ลองอ่านใหม่ (ไม่ได้ส่งบันทึกซ้ำ)`);
   }
-  throw new Error(`บันทึกลง Working Reference ไม่สำเร็จ แม้ลองซ้ำแล้ว ${maxAttempts} ครั้ง — ยังไม่มีข้อมูลใดถูกบันทึก กรุณาลองใหม่อีกครั้ง`);
+
+  // ตรวจสอบไม่ผ่านครบทุกรอบ — พิมพ์รายละเอียดแถวที่จับคู่ไม่ได้ไว้ช่วยไล่บั๊กจากค่าจริง โดยไม่เดาต่อ
+  // และไม่ส่งบันทึกซ้ำอีกเด็ดขาด (สำคัญ: ข้อมูลมีโอกาสสูงมากที่จะถูกบันทึกไปแล้วจริงตั้งแต่ตอนต้น)
+  if(freshWR){
+    rows.forEach((row, i) => {
+      if(!freshWR.some(r => rowMatchesForVerify_(r, row))){
+        const candidates = freshWR.filter(r => String(r[0]).trim() === String(row[0]).trim());
+        console.error(`ไม่พบแถวที่ ${i+1}/${rows.length} ที่ส่งไป: รหัส ${row[0]}, งวด "${row[1]}", ${row[2]} บาท, วันที่ ${row[7]} ${row[8]} ${row[9]}`);
+        console.error('ค่าเต็มที่ส่งไป (JSON):', JSON.stringify(row));
+        console.error(`แถวของรหัส ${row[0]} ที่เจอใน WR ตอนนี้ (${candidates.length} แถว) — เทียบดูว่าต่างกันตรงไหน:`, JSON.stringify(candidates));
+      }
+    });
+  }
+  throw new Error(`บันทึกไปแล้ว 1 ครั้ง แต่ระบบตรวจสอบผลไม่พบแถวที่ตรงกันครบ${lastReadErr ? ' (บางรอบอ่านข้อมูลกลับมาเช็คไม่สำเร็จ: '+lastReadErr.message+')' : ''} — ข้อมูลมีโอกาสสูงมากที่ถูกบันทึกไปแล้วจริง (น่าจะเป็นบั๊กของระบบตรวจสอบ ไม่ใช่การบันทึกล้มเหลว) กรุณาเปิด Working Reference เช็คด้วยตาก่อนเสมอ ห้ามกดบันทึกซ้ำจนกว่าจะเช็คแล้วว่าไม่มีข้อมูลจริงๆ (เปิด Console (F12) เพื่อดูรายละเอียดเปรียบเทียบค่าที่ส่งไปกับค่าที่เจอในชีท)`);
 }
 
 // replaceCheckToday_ ฝั่ง backend เป็นการ "แทนที่ทั้งหมด" (ไม่ใช่ต่อท้าย) การส่งซ้ำจึงปลอดภัยเสมอ
