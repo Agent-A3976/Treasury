@@ -577,6 +577,8 @@ const API_URL = "https://script.google.com/macros/s/AKfycbyXS_6-VR8Jyfqom2QGf2Bo
 const API_SECRET = "hft8Da-_fs8P1AHJHY8fTwF8b2FaTH3v";
 
 let WR_DATA = [];
+let lastWRLoadAt_ = 0;          // เวลาที่โหลด WR ล่าสุด (ใช้ตัดสินว่าข้อมูลในหน้าเว็บเก่าเกินไปหรือยัง)
+let wrCommitInProgress_ = false; // ระหว่างกำลังบันทึกเข้า WR ห้ามรีเฟรชแทรก
 let AR_DATA = [];
 let CONTRACTS_DATA = []; // [{code, months, monthlyAmount, updatedAt}] — 1 แถวต่อ 1 รหัสลูกค้า
 
@@ -753,6 +755,16 @@ function rowMatchesForVerify_(a, b){
          String(a[8]).trim()===String(b[8]).trim() && Number(a[9])===Number(b[9]);
 }
 async function commitToWRVerified_(rows, maxAttempts){
+  wrCommitInProgress_ = true;
+  try{
+    const result = await commitToWRVerifiedInner_(rows, maxAttempts);
+    lastWRLoadAt_ = Date.now();
+    return result;
+  }finally{
+    wrCommitInProgress_ = false;
+  }
+}
+async function commitToWRVerifiedInner_(rows, maxAttempts){
   maxAttempts = maxAttempts || 4;
   if(!rows.length) return WR_DATA;
 
@@ -2318,8 +2330,9 @@ document.querySelectorAll('.dash-subtabs button').forEach(btn=>{
   });
 });
 
-document.getElementById('btn-add').addEventListener('click', addRow);
-document.getElementById('in-slip').addEventListener('keydown', e=>{ if(e.key==='Enter') addRow(); });
+// เพิ่มรายการทันที (ไม่ต้องรอ) แล้วเช็คว่าข้อมูล WR เก่าเกิน 1 นาทีไหม ถ้าใช่โหลดใหม่แล้วตรวจซ้ำให้เอง
+document.getElementById('btn-add').addEventListener('click', ()=>{ addRow(); refreshWRSilently_(); });
+document.getElementById('in-slip').addEventListener('keydown', e=>{ if(e.key==='Enter'){ addRow(); refreshWRSilently_(); } });
 
 // คำนวณ "ยอดตามสลิป" อัตโนมัติ = จำนวนเงิน + ค่าธรรมเนียม + สะสม แต่ถ้าพนักงานแก้ช่องนี้เอง
 // จะหยุดเขียนทับให้ทันที (จนกว่าจะเริ่มรายการใหม่/วางข้อมูลใหม่)
@@ -2441,6 +2454,7 @@ async function init(){
     const contracts = await apiGet('getContracts');
     const checkToday = await apiGet('getCheckToday').catch(e=>{ console.error('getCheckToday failed:', e); return []; });
     WR_DATA = normalizeRefRows_(wr);
+    lastWRLoadAt_ = Date.now();
     AR_DATA = normalizeRefRows_(ar);
     CONTRACTS_DATA = contracts;
     applyCheckToday_(checkToday);
@@ -2461,9 +2475,19 @@ let currentUser = null; // {userId, nickname, isAdmin, sessionToken, branches: [
 
 // สาขาที่กำลังทำงานอยู่ตอนนี้ — จำไว้ใน localStorage กันต้องเลือกใหม่ทุกครั้งที่เปิดเว็บ
 const BRANCH_LABELS = { surat: 'สุราษ', samui: 'สมุย', langsuan: 'หลังสวน', trang: 'ตรัง' };
-let currentBranch = localStorage.getItem('payment_check_branch') || 'surat';
+// แต่ละแท็บจำสาขาของตัวเองแยกกันใน sessionStorage (อยู่รอดตอนรีโหลด แต่ไม่แชร์ข้ามแท็บ)
+// กันเคสเปิด 4 แท็บ 4 สาขา แล้วรีโหลดแท็บหนึ่งกลายเป็นสาขาที่สลับล่าสุดจากแท็บอื่น (เสี่ยงกรอกผิดสาขา)
+// localStorage ใช้แค่เป็นค่าเริ่มต้นตอนเปิดแท็บใหม่ครั้งแรกเท่านั้น
+function readBranch_(key, store){ try{ return store.getItem(key); }catch(e){ return null; } }
+let currentBranch = readBranch_('payment_check_branch', sessionStorage)
+                 || readBranch_('payment_check_branch', localStorage)
+                 || 'surat';
+// ผูกสาขาเริ่มต้นเข้ากับแท็บนี้ทันที — ไม่งั้นถ้ารีโหลดก่อนเคยสลับสาขา จะไปอ่าน localStorage
+// ที่แท็บอื่นอาจเปลี่ยนไปแล้วระหว่างนั้น
+try{ sessionStorage.setItem('payment_check_branch', currentBranch); }catch(e){}
 function setCurrentBranch(b){
   currentBranch = b;
+  try{ sessionStorage.setItem('payment_check_branch', b); }catch(e){}
   try{ localStorage.setItem('payment_check_branch', b); }catch(e){}
 }
 
@@ -2834,6 +2858,51 @@ document.getElementById('branch-switcher').addEventListener('change', (e)=> swit
 document.getElementById('btn-refresh-activity').addEventListener('click', renderActivityLog);
 document.getElementById('activity-filter-user').addEventListener('input', renderActivityLog);
 document.getElementById('activity-filter-action').addEventListener('input', renderActivityLog);
+
+
+/* ---------------------------------------------------------------------------
+ * รีเฟรชข้อมูล WR อัตโนมัติ — แก้อาการ "ตรวจแล้วไม่ถูก แต่รีหน้าใหม่แล้วถูก"
+ *
+ * สาเหตุ: หน้าเว็บโหลด Working Reference มาเก็บไว้ครั้งเดียวตอนเปิดเว็บ/สลับสาขา แล้วใช้ข้อมูลชุดนั้น
+ * ตรวจไปตลอด ถ้ามีการเพิ่มข้อมูลจากที่อื่นหลังจากนั้น (แท็บอื่น, เครื่องอื่น, พิมพ์ในชีทตรงๆ) หน้าเว็บ
+ * นี้จะไม่รู้ เช่น งวด 4(บางส่วน) ถูกบันทึกจากอีกแท็บ แต่แท็บนี้ยังไม่เห็น → รวมยอดไม่ครบ → "ไม่ถูก"
+ *
+ * แก้โดยโหลด WR ใหม่เงียบๆ เมื่อ: กลับมาที่แท็บนี้, ทุก 2 นาทีที่เปิดหน้าอยู่ และก่อนเพิ่มรายการตรวจ
+ * ถ้าข้อมูลเก่าเกิน 1 นาที — แล้ว render ผลตรวจใหม่ทันที
+ * ------------------------------------------------------------------------- */
+const WR_STALE_MS = 60 * 1000;
+let wrRefreshing_ = null;
+async function refreshWRSilently_(force){
+  if(!currentUser || wrCommitInProgress_) return;
+  if(!force && Date.now() - lastWRLoadAt_ < WR_STALE_MS) return;
+  if(wrRefreshing_) return wrRefreshing_;
+  const branchAtStart = currentBranch;
+  wrRefreshing_ = (async ()=>{
+    try{
+      const wr = normalizeRefRows_(await apiGet('getWR'));
+      const contracts = await apiGet('getContracts').catch(()=>null);
+      // ถ้าระหว่างรอผู้ใช้สลับสาขา หรือเริ่มบันทึกแทรกเข้ามา ทิ้งผลรอบนี้ไป กันข้อมูลผิดสาขา/ทับของใหม่
+      if(branchAtStart !== currentBranch || wrCommitInProgress_) return;
+      WR_DATA = wr;
+      if(contracts) CONTRACTS_DATA = contracts;
+      lastWRLoadAt_ = Date.now();
+      recomputeF();
+      renderCheckTable();
+      renderDashboard();
+      const s = document.getElementById('wr-search');
+      renderRefTable(WR_DATA,'wr-table','wr-hint', s ? s.value : '');
+      setConnStatus('connected', `เชื่อมต่อแล้ว — WR ${WR_DATA.length.toLocaleString()} แถว (อัปเดต ${new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'})})`);
+    }catch(e){
+      console.warn('รีเฟรช WR อัตโนมัติไม่สำเร็จ (ใช้ข้อมูลเดิมต่อไป):', e.message);
+    }finally{
+      wrRefreshing_ = null;
+    }
+  })();
+  return wrRefreshing_;
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') refreshWRSilently_(); });
+window.addEventListener('focus', ()=> refreshWRSilently_());
+setInterval(()=>{ if(document.visibilityState === 'visible') refreshWRSilently_(); }, 2 * 60 * 1000);
 
 // ถ้าเคยล็อกอินไว้แล้ว (จำไว้ในเบราว์เซอร์นี้) เข้าเว็บได้ทันทีไม่ต้องล็อกอินซ้ำ
 (function bootstrapAuth(){
