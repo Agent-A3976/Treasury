@@ -1,0 +1,66 @@
+<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>สัญญาเช่าโทรศัพท์ - สบายโฟนสุราษฎร์</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600&display=swap" rel="stylesheet">
+<script src="shared.js"></script><script>document.write(CSS)</script>
+<style>#sig{width:100%;height:220px;background:#fff;border:2px dashed var(--bd);border-radius:8px;touch-action:none;display:block}</style></head>
+<body><main><h1>สัญญาเช่าโทรศัพท์มือถือ · สบายโฟนสุราษฎร์</h1><div id="v"></div></main>
+<script>
+var bb={x0:1e9,y0:1e9,x1:-1,y1:-1};var tk=new URLSearchParams(location.search).get('t'),pin='',T={},img={},geo=null,sigLen=0,bmin='',bmax='',LB={};
+G.forEach(function(g){g[1].forEach(function(x){LB[x[0]]=x[1]})});
+function post(a,b){return fetch('/api/'+a,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}).then(function(r){return r.json().then(function(j){if(!r.ok)throw j.error||'เกิดข้อผิดพลาด';return j})})}
+function gate(){$('v').innerHTML=tk?'<div class="c"><h2>ใส่ PIN ที่ร้านให้</h2><input id="pn" inputmode="numeric" maxlength="6" autocomplete="off"><p class="err" id="e"></p><button onclick="openC()">เข้าสู่สัญญา</button></div>':'<div class="c">ลิงก์ไม่ถูกต้อง กรุณาติดต่อร้าน</div>'}
+function openC(){pin=$('pn').value;post('open',{t:tk,pin:pin}).then(function(j){T=j.terms||{};form(j.name)}).catch(function(e){$('e').textContent=e})}
+function ymd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function fe(k){return '<div class="fe" id="er_'+k+'"></div>'}
+function fld(k){var l=LB[k]+(O[k]?' (ไม่บังคับ)':'')+(k=='dueDay'?' (เลือกจากปฏิทิน ไม่เกิน 35 วันนับจากวันทำสัญญา)':'');
+if(CH[k])return '<div id="w_'+k+'"><label>'+l+'</label><div class="r">'+CH[k].map(function(o){return '<label><input type="radio" name="'+k+'" value="'+o+'" onchange="chg(\''+k+'\')"> '+o+'</label>'}).join('')+'</div><input id="o_'+k+'" hidden>'+fe(k)+'</div>';
+if(k=='dueDay')return '<div id="w_'+k+'"><label for="dueDay">'+l+'</label><input type="date" id="dueDay" min="'+bmin+'" max="'+bmax+'">'+fe(k)+'</div>';
+var big=/^(addrId|addrNow|workAddr)$/.test(k);
+return '<div id="w_'+k+'"><label for="'+k+'">'+l+'</label>'+(big?'<textarea rows="2" id="'+k+'"></textarea>':'<input id="'+k+'"'+(k=='idno'?' inputmode="numeric" maxlength="13"':PH[k]?' type="tel" inputmode="numeric" maxlength="10"':k=='workTel'?' type="tel"':'')+'>')+fe(k)+'</div>'}
+function chg(k){var r=document.querySelector('input[name='+k+']:checked'),o=$('o_'+k),s=r&&SP[r.value];o.hidden=!s;o.placeholder=s||'';if(!s)o.value=''}
+function tg(){$('w_userName').hidden=$('w_userTel').hidden=$('userSelf').checked;$('w_addrNow').hidden=$('addrSame').checked}
+function form(name){
+var b=/^\d{4}-\d\d-\d\d$/.test(T.start||'')?new Date(T.start+'T00:00:00'):new Date();b.setHours(0,0,0,0);bmin=ymd(b);var e=new Date(b);e.setDate(e.getDate()+35);bmax=ymd(e);
+var h='<div class="c"><h2>รายละเอียดเครื่องและค่างวด'+(name?' ของ '+E(name):'')+'</h2><table>'+Object.keys(TL).filter(function(k){return T[k]}).map(function(k){return '<tr><td>'+TL[k].replace(/ \(รวม.*\)/,'')+'</td><td>'+E(T[k])+'</td></tr>'}).join('')+'</table><p><a class="b" href="contract.pdf" target="_blank" rel="noopener">เปิดอ่านสัญญาฉบับเต็ม (PDF)</a></p></div><form id="f" novalidate onsubmit="send(event)">';
+G.forEach(function(g){h+='<div class="c"><h2>'+g[0]+'</h2>'+g[1].map(function(x){var k=x[0];return (k=='addrNow'?'<label class="k"><input type="checkbox" id="addrSame" onchange="tg()"> ที่อยู่ติดต่อตรงกับที่อยู่ตามบัตร</label>':'')+(k=='userName'?'<label class="k"><input type="checkbox" id="userSelf" onchange="tg()"> ใช้เองคนเดียว (ระบบใส่ชื่อ-นามสกุลและเบอร์ของผู้เช่าให้เอง)</label>':'')+fld(k)}).join('')+'</div>'});
+h+='<div class="c"><h2>ข้อมูลเพิ่มเติม</h2>'+RD.map(function(r){return '<label>'+r[1]+'</label><div class="r">'+r[2].map(function(o){return '<label><input type="radio" name="'+r[0]+'" value="'+o+'"> '+o+'</label>'}).join('')+'</div>'+fe(r[0])}).join('')+'</div>';
+h+='<div class="c"><h2>แนบเอกสาร</h2><label>รูปสำเนาบัตรประชาชน (ถ่ายให้เห็นชัด)</label><input type="file" accept="image/*" onchange="pick(\'id\',this)"><img class="p" id="pvid" hidden alt="ตัวอย่างรูปบัตร">'+fe('id')+'<label>เซลฟี่คู่บัตรประชาชน</label><input type="file" accept="image/*" capture="user" onchange="pick(\'self\',this)"><img class="p" id="pvself" hidden alt="ตัวอย่างเซลฟี่">'+fe('self')+'</div>';
+h+='<div class="c"><h2>แผนที่แนบท้าย: ตำแหน่งที่พักอาศัย</h2><p>กดตอนอยู่ที่พัก และอนุญาตการเข้าถึงตำแหน่งในมือถือ</p><button type="button" class="g" onclick="loc()">แชร์ตำแหน่งปัจจุบัน</button> <span id="gs"></span>'+fe('geo')+'</div>';
+h+='<div class="c"><h2>ยอมรับและเซ็นชื่อ</h2><label class="k"><input type="checkbox" id="c1"> ข้าพเจ้าได้อ่านและเข้าใจสัญญาเช่าโทรศัพท์มือถือและเงื่อนไขท้ายสัญญาทั้งหมดแล้ว</label>'+fe('c1')+'<label class="k"><input type="checkbox" id="c2"> ข้าพเจ้ายอมรับเงื่อนไขการชำระค่าเช่า การติดตั้งระบบติดตามและการล็อคเครื่องตามสัญญา</label>'+fe('c2')+'<label class="k"><input type="checkbox" id="c3"> ข้าพเจ้ายินยอมให้ร้านเก็บและใช้ข้อมูลส่วนบุคคล สำเนาบัตร รูปถ่าย และตำแหน่งที่ตั้ง เพื่อการทำสัญญาและติดตามสัญญานี้ (PDPA)</label>'+fe('c3')+'<label>เซ็นชื่อด้วยนิ้วหรือเมาส์ ลายเซ็นนี้ใช้แทนการลงชื่อผู้เช่าทุกจุดในสัญญา</label><canvas id="sig"></canvas>'+fe('sig')+'<p><button type="button" class="g" id="clr">ล้างลายเซ็น</button></p><p class="err" id="sm"></p><button id="go">ส่งสัญญา</button></div></form>';
+$('v').innerHTML=h;initSig();
+$('f').addEventListener('input',function(x){var t=x.target,k=t.id;if(PH[k]||k=='idno')t.value=t.value.replace(/\D/g,'');clr(k)});
+$('f').addEventListener('change',function(x){clr(x.target.name||x.target.id)})}
+function clr(k){var e=$('er_'+k);if(e)e.textContent='';var i=$(k);if(i)i.classList.remove('bad')}
+function shrink(f){return new Promise(function(ok,no){var i=new Image();i.onload=function(){var s=Math.min(1,1280/Math.max(i.width,i.height)),c=document.createElement('canvas');c.width=i.width*s;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);ok(c.toDataURL('image/jpeg',.72))};i.onerror=no;i.src=URL.createObjectURL(f)})}
+function pick(k,n){var f=n.files[0];if(!f)return;shrink(f).then(function(u){img[k]=u;$('pv'+k).src=u;$('pv'+k).hidden=false;clr(k)}).catch(function(){alert('อ่านรูปไม่ได้ กรุณาลองรูปอื่น')})}
+function loc(){var s=$('gs');s.textContent='กำลังหาตำแหน่ง...';navigator.geolocation.getCurrentPosition(function(p){geo={lat:p.coords.latitude,lng:p.coords.longitude,acc:Math.round(p.coords.accuracy)};s.textContent='ได้ตำแหน่งแล้ว (ความแม่นยำประมาณ '+geo.acc+' ม.)';clr('geo')},function(){s.textContent='ไม่ได้รับตำแหน่ง กรุณาอนุญาตการเข้าถึงตำแหน่งแล้วกดใหม่'},{enableHighAccuracy:true,timeout:20000})}
+function initSig(){var cv=$('sig'),x=cv.getContext('2d'),d=devicePixelRatio||1,r=cv.getBoundingClientRect(),on=false,lx,ly;cv.width=r.width*d;cv.height=r.height*d;x.scale(d,d);x.lineWidth=2.4;x.lineCap=x.lineJoin='round';x.strokeStyle='#111';
+function pt(e){var b=cv.getBoundingClientRect(),p=[e.clientX-b.left,e.clientY-b.top];bb.x0=Math.min(bb.x0,p[0]);bb.y0=Math.min(bb.y0,p[1]);bb.x1=Math.max(bb.x1,p[0]);bb.y1=Math.max(bb.y1,p[1]);return p}
+cv.onpointerdown=function(e){on=true;cv.setPointerCapture(e.pointerId);var p=pt(e);lx=p[0];ly=p[1];x.beginPath();x.moveTo(lx,ly);x.lineTo(lx+.1,ly+.1);x.stroke()};
+cv.onpointermove=function(e){if(!on)return;var p=pt(e);x.beginPath();x.moveTo(lx,ly);x.lineTo(p[0],p[1]);x.stroke();sigLen+=Math.hypot(p[0]-lx,p[1]-ly);lx=p[0];ly=p[1];if(sigLen>150)clr('sig')};
+cv.onpointerup=cv.onpointercancel=function(){on=false};
+$('clr').onclick=function(){x.clearRect(0,0,r.width,r.height);sigLen=0;bb={x0:1e9,y0:1e9,x1:-1,y1:-1}}}
+function sigPng(){var cv=$('sig'),d=devicePixelRatio||1,p=6,x=Math.max(0,bb.x0-p),y=Math.max(0,bb.y0-p),w=Math.min(cv.clientWidth,bb.x1+p)-x,h=Math.min(cv.clientHeight,bb.y1+p)-y,c=document.createElement('canvas');c.width=Math.max(1,w*d);c.height=Math.max(1,h*d);c.getContext('2d').drawImage(cv,x*d,y*d,w*d,h*d,0,0,c.width,c.height);return c.toDataURL('image/png')}
+function val(){var d={},bad=null,n=0;function fail(k,m){var e=$('er_'+k);if(e)e.textContent=m;var i=$(k);if(i)i.classList.add('bad');n++;if(!bad)bad=k}
+var self=$('userSelf').checked,same=$('addrSame').checked;
+G.forEach(function(g){g[1].forEach(function(x){var k=x[0],v;clr(k);
+if(k=='addrNow'&&same){d[k]='ตรงกับที่อยู่ตามบัตร';return}
+if(self&&(k=='userName'||k=='userTel')){d[k]=k=='userName'?(d.first+' '+d.last):d.phone;return}
+var lb=LB[k].replace(/ ?\(.*\)/,'');
+if(CH[k]){var r=document.querySelector('input[name='+k+']:checked');if(!r)return fail(k,'กรุณาเลือก'+lb);v=r.value;if(SP[v]){var t=$('o_'+k).value.trim();if(!t)return fail(k,'กรุณา'+SP[v]);v=(v=='อื่นๆ'||k=='refRel')?t:v+': '+t}d[k]=v;return}
+v=($(k).value||'').trim();
+if(!v){if(O[k]){d[k]='';return}return fail(k,'กรุณากรอก'+lb)}
+if(k=='idno'&&!/^\d{13}$/.test(v))return fail(k,'เลขบัตรประชาชนต้องครบ 13 หลัก');
+if(PH[k]&&!/^\d{10}$/.test(v))return fail(k,'เบอร์โทรต้องครบ 10 หลัก');
+if(k=='dueDay'&&(v<bmin||v>bmax))return fail(k,'เลือกได้ไม่เกิน 35 วันนับจากวันทำสัญญา');
+d[k]=v})});
+RD.forEach(function(r){clr(r[0]);var x=document.querySelector('input[name='+r[0]+']:checked');if(x)d[r[0]]=x.value;else fail(r[0],'กรุณาเลือกคำตอบ')});
+if(!img.id)fail('id','กรุณาแนบรูปบัตรประชาชน');if(!img.self)fail('self','กรุณาแนบเซลฟี่คู่บัตร');if(!geo)fail('geo','กรุณากดแชร์ตำแหน่งที่พักอาศัย');
+['c1','c2','c3'].forEach(function(c){if($(c).checked)d[c]='on';else fail(c,'กรุณาติ๊กยอมรับ')});
+if(sigLen<150)fail('sig','กรุณาเซ็นชื่อในกรอบให้ชัดเจน');
+$('sm').textContent=n?'ยังกรอกไม่ครบหรือไม่ถูกต้อง '+n+' รายการ กรุณาแก้ไขช่องที่ขึ้นสีแดง':'';
+if(bad){var el=$('er_'+bad);el.scrollIntoView({behavior:'smooth',block:'center'});var i=$(bad);if(i&&i.focus)i.focus({preventScroll:true});return null}return d}
+function send(ev){ev.preventDefault();var d=val();if(!d)return;$('go').disabled=true;
+post('submit',{t:tk,pin:pin,form:d,sig:sigPng(),idImg:img.id,selfie:img.self,geo:geo}).then(function(){$('v').innerHTML='<div class="c"><h2>ส่งสัญญาเรียบร้อยแล้ว</h2><p>ร้านจะตรวจสอบและติดต่อกลับ ลิงก์นี้ใช้ไม่ได้อีกแล้ว</p></div>'}).catch(function(e){alert(e);$('go').disabled=false})}
+gate();
+</script></body></html>
