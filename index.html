@@ -495,6 +495,14 @@
     </div>
 
     <div class="wr-subpanel" id="wr-sub-return">
+            <div class="card accent-teal">
+        <div class="toolbar">
+          <h2 style="margin:0;">รายการรอย้าย (จากระบบปิดยอดประจำวัน)</h2>
+          <button class="ghost" id="btn-refresh-pending-returns">↻ โหลดใหม่</button>
+        </div>
+        <p class="hint" style="margin:0 0 10px;">ลูกค้าที่พนักงานบันทึกว่าคืนเครื่องในระบบปิดยอด และยังมีประวัติค้างใน Working Reference กดปุ่มเพื่อเปิดหน้าตรวจประวัติก่อนย้าย (ยังไม่ย้ายจนกว่าจะกดยืนยันอีกครั้ง)</p>
+        <div id="pending-returns-result"></div>
+      </div>
       <div class="card">
         <h2>ย้ายลูกค้าไปคืนเครื่อง</h2>
         <p class="hint" style="margin:0 0 10px;">พิมพ์รหัสลูกค้าแล้วกดค้นหา ระบบจะดึงประวัติทั้งหมดของลูกค้าคนนั้นมาให้ดูก่อน ยืนยันแล้วค่อยย้ายจริง (ลบออกจาก Working Reference ถาวร)</p>
@@ -1913,12 +1921,79 @@ async function confirmMoveToReturned(){
     CONTRACTS_DATA = await apiGet('getContracts');
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     renderDashboard();
+    loadPendingReturns();
   }catch(e){
     previewEl.innerHTML += `<p class="hint" style="color:var(--red);margin-top:8px;">ย้ายไม่สำเร็จ: ${e.message}</p>`;
     btn.disabled = false; btn.textContent = `ยืนยันย้ายไปคืนเครื่อง`;
   }
 }
 
+  /* ===================== รายการรอย้าย (จากระบบปิดยอด) ===================== */
+function escHtml_(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtDateKey_(k){
+  const s = String(k);
+  return `${+s.slice(6,8)}/${+s.slice(4,6)}/${+s.slice(0,4)+543}`;
+}
+
+async function loadPendingReturns(){
+  const el = document.getElementById('pending-returns-result');
+  el.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  try{
+    const data = await apiGet('getPendingReturns');
+    renderPendingReturns(data);
+  }catch(e){
+    el.innerHTML = `<div class="empty">โหลดไม่สำเร็จ: ${escHtml_(e.message)}</div>`;
+  }
+}
+
+function renderPendingReturns(data){
+  const el = document.getElementById('pending-returns-result');
+  if(data.problem){
+    el.innerHTML = `<div class="banner bad"><div class="icon">!</div><div><div class="title">อ่านข้อมูลจากระบบปิดยอดไม่ได้</div><div class="sub">${escHtml_(data.problem)}</div></div></div>`;
+    return;
+  }
+  const items = data.items || [];
+  if(items.length===0){
+    el.innerHTML = '<div class="empty">ไม่มีรายการรอย้าย — ลูกค้าที่บันทึกคืนเครื่องไว้ทุกรายไม่มีประวัติค้างใน Working Reference แล้ว</div>';
+    return;
+  }
+  let html = `<p class="note" style="margin:0 0 10px;">รอย้าย ${items.length} ราย</p>
+    <div class="scroll" style="max-height:360px;"><table><thead><tr>
+      <th>วันที่คืน</th><th>รหัส</th><th>ประเภท</th><th>รุ่น</th>
+      <th class="num">จ่ายแล้ว (ปิดยอด)</th><th class="num">WR ครบถึงงวด</th><th class="num">แถวใน WR</th><th>หมายเหตุ</th><th></th>
+    </tr></thead><tbody>`;
+  items.forEach(it=>{
+    const modePill = it.mode==='ยึด' ? 'p-amber' : 'p-gray';
+    const warn = (it.warnings||[]).map(w=>`<div class="note" style="color:${it.blocked?'var(--red)':'var(--amber)'};">${escHtml_(w)}</div>`).join('');
+    const action = it.blocked
+      ? '<span class="pill p-red">ย้ายอัตโนมัติไม่ได้</span>'
+      : `<button class="ghost btn-pending-move" data-code="${escHtml_(it.code)}">ตรวจและย้าย</button>`;
+    html += `<tr${it.blocked?' style="background:var(--red-l);"':''}>
+      <td>${fmtDateKey_(it.returnDateKey)}</td>
+      <td>${escHtml_(it.code)}</td>
+      <td><span class="pill ${modePill}">${escHtml_(it.mode||'-')}</span></td>
+      <td>${escHtml_(it.model)}</td>
+      <td class="num">${escHtml_(it.paidTotal||'-')}</td>
+      <td class="num">${it.wrCompleted}</td>
+      <td class="num">${it.wrRowsBefore}</td>
+      <td>${warn || '<span class="note">ตรงกัน</span>'}</td>
+      <td style="white-space:nowrap;">${action}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  el.innerHTML = html;
+
+  el.querySelectorAll('.btn-pending-move').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.getElementById('return-code-input').value = btn.dataset.code;
+      previewReturn(); // ใช้ขั้นตอน preview + ยืนยันเดิมทั้งหมด ไม่ย้ายอัตโนมัติ
+      document.getElementById('return-preview').scrollIntoView({behavior:'smooth', block:'center'});
+    });
+  });
+}
+document.getElementById('btn-refresh-pending-returns').addEventListener('click', loadPendingReturns);
 function populateBackfillDateSelects(){
   const daySel = document.getElementById('backfill-day');
   const monthSel = document.getElementById('backfill-month');
@@ -2344,6 +2419,7 @@ document.querySelectorAll('.wr-subtabs button').forEach(btn=>{
     document.querySelectorAll('.wr-subpanel').forEach(p=>p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('wr-sub-'+btn.dataset.wrsub).classList.add('active');
+    if(btn.dataset.wrsub==='return') loadPendingReturns();
   });
 });
 
