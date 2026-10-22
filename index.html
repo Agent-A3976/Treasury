@@ -222,6 +222,7 @@
         <option value="samui">สมุย</option>
         <option value="langsuan">หลังสวน</option>
         <option value="trang">ตรัง</option>
+        <option value="maesot">แม่สอด</option>
       </select>
       <label>รหัสผ่าน</label>
       <div class="pw-field">
@@ -2578,7 +2579,7 @@ async function init(){
 let currentUser = null; // {userId, nickname, isAdmin, sessionToken, branches: ['surat','samui']}
 
 // สาขาที่กำลังทำงานอยู่ตอนนี้ — จำไว้ใน localStorage กันต้องเลือกใหม่ทุกครั้งที่เปิดเว็บ
-const BRANCH_LABELS = { surat: 'สุราษ', samui: 'สมุย', langsuan: 'หลังสวน', trang: 'ตรัง' };
+const BRANCH_LABELS = { surat: 'สุราษ', samui: 'สมุย', langsuan: 'หลังสวน', trang: 'ตรัง', maesot: 'แม่สอด' };
 // แต่ละแท็บจำสาขาของตัวเองแยกกันใน sessionStorage (อยู่รอดตอนรีโหลด แต่ไม่แชร์ข้ามแท็บ)
 // กันเคสเปิด 4 แท็บ 4 สาขา แล้วรีโหลดแท็บหนึ่งกลายเป็นสาขาที่สลับล่าสุดจากแท็บอื่น (เสี่ยงกรอกผิดสาขา)
 // localStorage ใช้แค่เป็นค่าเริ่มต้นตอนเปิดแท็บใหม่ครั้งแรกเท่านั้น
