@@ -1923,6 +1923,7 @@ async function confirmMoveToReturned(){
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     renderDashboard();
     loadPendingReturns();
+    loadPendingReturns();
   }catch(e){
     previewEl.innerHTML += `<p class="hint" style="color:var(--red);margin-top:8px;">ย้ายไม่สำเร็จ: ${e.message}</p>`;
     btn.disabled = false; btn.textContent = `ยืนยันย้ายไปคืนเครื่อง`;
@@ -2549,6 +2550,7 @@ async function init(){
   populateBackfillDateSelects();
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
+  const pr = document.getElementById('pending-returns-result'); if(pr) pr.innerHTML = '';
   try{
     // ยิงทีละคำขอ ไม่ยิงพร้อมกัน — เคยลองยิงพร้อมกันทั้ง 4 ตัวเพื่อความเร็ว แต่พบว่า Apps Script
     // กั้นคำขอ (rate limit) เมื่อถูกยิงถี่เกินไปในเวลาสั้นๆ ทำให้ "เชื่อมต่อไม่สำเร็จ" เป็นประจำ
