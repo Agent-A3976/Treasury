@@ -272,6 +272,17 @@
   </nav>
 
   <section class="panel active" id="panel-check">
+    <div class="card accent-teal" id="fix-requests-card" style="display:none;">
+      <div class="toolbar">
+        <h2 style="margin:0;">แจ้งแก้ไขจากระบบปิดยอด <span class="pill p-red" id="fix-requests-count" style="margin-left:6px;"></span></h2>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <label style="margin:0;display:flex;align-items:center;gap:5px;font-size:12px;"><input type="checkbox" id="fix-show-done" style="width:auto;"> แสดงที่แก้แล้ว</label>
+          <button class="ghost" id="btn-refresh-fix-requests">↻ โหลดใหม่</button>
+        </div>
+      </div>
+      <p class="hint" style="margin:0 0 10px;">รายการที่พนักงานแจ้งแก้ไขไว้ในระบบปิดยอด (14 วันล่าสุด) เช่น รหัสลูกค้า งวดที่ จำนวนเงินที่คีย์ผิด เลขบรรทัดแสดงตามที่พนักงานกรอก ตรวจกับ Working Reference ด้วยตา แก้เสร็จแล้วกด "แก้แล้ว"</p>
+      <div id="fix-requests-result"></div>
+    </div>
     <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div style="display:flex;align-items:center;gap:8px;">
         <label style="margin:0;white-space:nowrap;">วันที่ทำรายการ</label>
@@ -2204,6 +2215,74 @@ function renderMissingContracts(){
   });
 }
 
+/* ===================== แจ้งแก้ไขจากระบบปิดยอด ===================== */
+async function loadFixRequests(){
+  const card = document.getElementById('fix-requests-card');
+  const el = document.getElementById('fix-requests-result');
+  const showDone = document.getElementById('fix-show-done').checked;
+  const branchAtStart = currentBranch;
+  try{
+    const data = await apiGet('getFixRequests', {includeDone: showDone ? '1' : ''});
+    if(branchAtStart !== currentBranch) return; // สลับสาขาระหว่างรอ
+    renderFixRequests(data, showDone);
+  }catch(e){
+    console.warn('โหลดรายการแก้ไขจากระบบปิดยอดไม่สำเร็จ:', e.message);
+  }
+}
+
+function renderFixRequests(data, showDone){
+  const card = document.getElementById('fix-requests-card');
+  const el = document.getElementById('fix-requests-result');
+  const countEl = document.getElementById('fix-requests-count');
+  if(data.problem){
+    card.style.display = '';
+    countEl.style.display = 'none';
+    el.innerHTML = `<p class="note">ดึงรายการแก้ไขจากระบบปิดยอดไม่ได้: ${escHtml_(data.problem)}</p>`;
+    return;
+  }
+  const items = data.items || [];
+  const pending = items.filter(it=>!it.done);
+  // ซ่อนการ์ดทั้งใบเมื่อไม่มีอะไรค้าง (ยกเว้นกำลังเปิดดูที่แก้แล้ว)
+  if(items.length===0 && !showDone){ card.style.display = 'none'; return; }
+  card.style.display = '';
+  countEl.style.display = pending.length ? '' : 'none';
+  countEl.textContent = pending.length ? `ค้าง ${pending.length}` : '';
+  if(items.length===0){ el.innerHTML = '<div class="empty">ไม่มีรายการแก้ไขใน 14 วันล่าสุด</div>'; return; }
+  let html = `<div class="scroll" style="max-height:320px;"><table><thead><tr>
+    <th>วันที่แจ้ง</th><th>บรรทัดที่</th><th>ใส่อะไรผิด</th><th>จาก</th><th>ต้องเป็น</th><th></th>
+  </tr></thead><tbody>`;
+  items.forEach(it=>{
+    const lines = (it.lines||[]).map(escHtml_).join(', ') || '-';
+    const action = it.done
+      ? `<span class="pill p-green">แก้แล้ว</span><div class="note">${escHtml_(it.doneBy||'')}${it.doneAt ? ' · '+new Date(it.doneAt).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : ''}</div>`
+      : `<button class="ghost btn-fix-done" data-id="${escHtml_(it.id)}">แก้แล้ว</button>`;
+    html += `<tr${it.done?' style="opacity:.6;"':''}>
+      <td>${fmtDateKey_(it.dateKey)}</td>
+      <td>${lines}</td>
+      <td>${escHtml_(it.field||'-')}</td>
+      <td>${escHtml_(it.from||'-')}</td>
+      <td>${escHtml_(it.to||'-')}</td>
+      <td style="white-space:nowrap;">${action}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  el.innerHTML = html;
+  el.querySelectorAll('.btn-fix-done').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+      try{
+        await apiGet('markFixDone', {id: btn.dataset.id});
+        logActivity('กดแก้แล้ว (รายการแก้ไขจากระบบปิดยอด)', btn.dataset.id);
+      }catch(e){
+        alert('บันทึกไม่สำเร็จ: ' + e.message);
+      }
+      loadFixRequests();
+    });
+  });
+}
+document.getElementById('btn-refresh-fix-requests').addEventListener('click', loadFixRequests);
+document.getElementById('fix-show-done').addEventListener('change', loadFixRequests);
+
 /* ===================== ดึงสัญญาจากรายการขายในระบบปิดยอด ===================== */
 let SALES_HINTS = {};          // รหัส (ตัดศูนย์นำหน้า) -> {months, inst} เฉพาะรหัสที่ยังไม่มีสัญญา
 let SALES_HINTS_BRANCH = '';   // สาขาที่ hints ชุดนี้เป็นของ
@@ -2647,6 +2726,7 @@ async function init(){
   populateBackfillDateSelects();
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
+  document.getElementById('fix-requests-card').style.display = 'none';
   try{
     // ยิงทีละคำขอ ไม่ยิงพร้อมกัน — เคยลองยิงพร้อมกันทั้ง 4 ตัวเพื่อความเร็ว แต่พบว่า Apps Script
     // กั้นคำขอ (rate limit) เมื่อถูกยิงถี่เกินไปในเวลาสั้นๆ ทำให้ "เชื่อมต่อไม่สำเร็จ" เป็นประจำ
@@ -2671,6 +2751,7 @@ async function init(){
   }
   renderCheckTable();
   renderDashboard();
+  loadFixRequests(); // ไม่รอผล ไม่ให้ช้าตอนเปิดเว็บ
 }
 
 /* ===================== ระบบล็อกอิน / สมัครสมาชิก / บันทึกกิจกรรม ===================== */
