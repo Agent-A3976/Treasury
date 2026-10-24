@@ -484,6 +484,14 @@
         <p class="hint" style="margin:0 0 10px;">เทียบรหัสลูกค้าทั้งหมดใน Working Reference กับข้อมูลสัญญาที่เคยบันทึกไว้ — รหัสไหนมีประวัติผ่อนจริงแต่ยังไม่เคยบันทึกข้อมูลสัญญาเลย จะขึ้นในรายการนี้ (เรียงจากลูกค้าที่มีประวัติเยอะสุดก่อน)</p>
         <div id="missing-contracts-result"></div>
       </div>
+      <div class="card accent-teal">
+        <div class="toolbar">
+          <h2 style="margin:0;">ดึงสัญญาจากรายการขายในระบบปิดยอด</h2>
+          <button class="ghost" id="btn-pull-sales-contracts">↻ ดึงข้อมูล (90 วันล่าสุด)</button>
+        </div>
+        <p class="hint" style="margin:0 0 10px;">อ่านรายการขายผ่อน (รหัส + ค่างวด + จำนวนงวด) ที่พนักงานบันทึกไว้ในระบบปิดยอด แล้วเลือกรายการเพื่อส่งไปช่องเทียบด้านล่าง ยังไม่บันทึกจนกว่าจะกดบันทึกในขั้นตอนเทียบ ตรวจค่าที่คีย์ด้วยตาเสมอ เพราะลูกค้าใหม่ยังไม่มีประวัติให้เทียบ</p>
+        <div id="sales-contracts-result"></div>
+      </div>
       <div class="card accent-purple">
         <h2><span class="card-icon purple">📄</span>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</h2>
         <p class="hint" style="margin:0 0 10px;">วางข้อมูล (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) คั่นด้วย Tab หนึ่งบรรทัดต่อหนึ่งคน ระบบจะเทียบกับประวัติจริงใน Working Reference — ยอดที่บันทึกไว้จะใช้เป็นค่าตรวจงวดแรกของลูกค้าใหม่ต่อไป</p>
@@ -1923,7 +1931,6 @@ async function confirmMoveToReturned(){
     renderRefTable(WR_DATA,'wr-table','wr-hint', document.getElementById('wr-search').value);
     renderDashboard();
     loadPendingReturns();
-    loadPendingReturns();
   }catch(e){
     previewEl.innerHTML += `<p class="hint" style="color:var(--red);margin-top:8px;">ย้ายไม่สำเร็จ: ${e.message}</p>`;
     btn.disabled = false; btn.textContent = `ยืนยันย้ายไปคืนเครื่อง`;
@@ -2175,9 +2182,11 @@ function renderMissingContracts(){
     return;
   }
   let html = `<p class="note" style="margin:0 0 10px;">พบ ${missing.length.toLocaleString()} รหัสที่ยังไม่มีข้อมูลสัญญา</p>
-    <div class="scroll" style="max-height:320px;"><table><thead><tr><th>รหัสลูกค้า</th><th class="num">จำนวนแถวประวัติใน WR</th><th></th></tr></thead><tbody>`;
+    <div class="scroll" style="max-height:320px;"><table><thead><tr><th>รหัสลูกค้า</th><th class="num">จำนวนแถวประวัติใน WR</th><th>พบในระบบปิดยอด</th><th></th></tr></thead><tbody>`;
   missing.forEach(([code, count])=>{
-    html += `<tr><td>${code}</td><td class="num">${count}</td><td><button class="ghost btn-fill-contract-code" data-code="${code}">➕ กรอกสัญญา</button></td></tr>`;
+    const hint = salesHintFor_(code);
+    const hintCell = hint ? `${hint.months} งวด × ${fmt(hint.inst)}` : '<span class="note">-</span>';
+    html += `<tr><td>${code}</td><td class="num">${count}</td><td>${hintCell}</td><td><button class="ghost btn-fill-contract-code" data-code="${code}">➕ กรอกสัญญา</button></td></tr>`;
   });
   html += '</tbody></table></div>';
   resultEl.innerHTML = html;
@@ -2188,11 +2197,98 @@ function renderMissingContracts(){
       const ta = document.getElementById('contract-paste');
       // เติมรหัสลงช่องวางข้อมูลสัญญาให้เลย (เว้นช่องจำนวนงวด/ยอดไว้ให้กรอกเอง) ต่อท้ายบรรทัดเดิมถ้ามี
       const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
-      ta.value += `${prefix}${code}\t\t`;
+      const hint = salesHintFor_(code);
+      ta.value += hint ? `${prefix}${code}\t${hint.months}\t${hint.inst}` : `${prefix}${code}\t\t`;
       ta.focus();
     });
   });
 }
+
+/* ===================== ดึงสัญญาจากรายการขายในระบบปิดยอด ===================== */
+let SALES_HINTS = {};          // รหัส (ตัดศูนย์นำหน้า) -> {months, inst} เฉพาะรหัสที่ยังไม่มีสัญญา
+let SALES_HINTS_BRANCH = '';   // สาขาที่ hints ชุดนี้เป็นของ
+let salesLoadedFor_ = '';      // สาขาที่โหลดอัตโนมัติไปแล้ว
+let pulledSales_ = [];
+const normCodeJs_ = c => String(c==null?'':c).trim().replace(/^0+(?=\d)/,'');
+function salesHintFor_(code){
+  return SALES_HINTS_BRANCH===currentBranch ? (SALES_HINTS[normCodeJs_(code)] || null) : null;
+}
+
+async function loadSalesContracts(){
+  const el = document.getElementById('sales-contracts-result');
+  el.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  const branchAtStart = currentBranch;
+  try{
+    const data = await apiGet('getSalesContracts', {days: 90});
+    if(branchAtStart !== currentBranch) return; // สลับสาขาระหว่างรอ
+    salesLoadedFor_ = branchAtStart;
+    renderSalesContracts(data);
+    if(!data.problem){
+      SALES_HINTS = {}; SALES_HINTS_BRANCH = branchAtStart;
+      (data.items||[]).filter(it=>it.status==='new').forEach(it=>{ SALES_HINTS[normCodeJs_(it.code)] = {months: it.months, inst: it.inst}; });
+      renderMissingContracts();
+    }
+  }catch(e){
+    el.innerHTML = `<div class="empty">โหลดไม่สำเร็จ: ${escHtml_(e.message)}</div>`;
+  }
+}
+
+function renderSalesContracts(data){
+  const el = document.getElementById('sales-contracts-result');
+  if(data.problem){
+    el.innerHTML = `<div class="banner bad"><div class="icon">!</div><div><div class="title">อ่านข้อมูลจากระบบปิดยอดไม่ได้</div><div class="sub">${escHtml_(data.problem)}</div></div></div>`;
+    return;
+  }
+  pulledSales_ = data.items || [];
+  const skipNote = [];
+  if(data.sameCount) skipNote.push(`ตรงกับสัญญาเดิมแล้ว ${data.sameCount} รหัส`);
+  if(data.returnedSkipped) skipNote.push(`ข้าม ${data.returnedSkipped} รหัสที่คืนเครื่องแล้ว`);
+  const extra = skipNote.length ? `<p class="note" style="margin:0 0 10px;">${skipNote.join(' · ')}</p>` : '';
+  if(pulledSales_.length===0){
+    el.innerHTML = extra + '<div class="empty">ไม่มีรายการขายใหม่ที่ต้องนำเข้าสัญญาในช่วง 90 วันล่าสุด</div>';
+    return;
+  }
+  let html = extra + `<p class="note" style="margin:0 0 10px;">พบ ${pulledSales_.length} รหัส (ติ๊กไว้ล่วงหน้าเฉพาะรหัสที่ยังไม่มีสัญญาและไม่มีข้อสังเกต)</p>
+    <div class="scroll" style="max-height:340px;"><table><thead><tr>
+      <th></th><th>รหัส</th><th class="num">จำนวนงวด</th><th class="num">ค่างวด</th><th>วันที่ขาย</th><th>รุ่น</th><th>สถานะ / หมายเหตุ</th>
+    </tr></thead><tbody>`;
+  pulledSales_.forEach((it,i)=>{
+    const notes = [];
+    if(it.status==='diff') notes.push(`<span class="pill p-amber">มีสัญญาเดิม</span> <span class="note">เดิม ${it.existingMonths} งวด / ${fmt(it.existingInst)} บาท — บันทึกใหม่จะเขียนทับ</span>`);
+    else notes.push('<span class="pill p-green">ยังไม่มีสัญญา</span>');
+    if(it.multiple) notes.push('<div class="note" style="color:var(--amber);">พบหลายรายการขายของรหัสนี้ค่าต่างกัน ใช้รายการล่าสุด ตรวจด้วยตา</div>');
+    if(!it.inWR) notes.push('<div class="note">ยังไม่มีประวัติใน Working Reference</div>');
+    const checked = (it.status==='new' && !it.multiple) ? ' checked' : '';
+    html += `<tr>
+      <td><input type="checkbox" class="sc-pick" data-i="${i}"${checked} style="width:auto;"></td>
+      <td>${escHtml_(it.code)}</td>
+      <td class="num">${it.months}</td>
+      <td class="num">${fmt(it.inst)}</td>
+      <td>${fmtDateKey_(it.saleDateKey)}</td>
+      <td>${escHtml_(it.model)}</td>
+      <td>${notes.join('')}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>
+    <div style="margin-top:12px;"><button class="primary" id="btn-fill-sales-contracts">เพิ่มรายการที่เลือกลงช่องเทียบด้านล่าง</button></div>`;
+  el.innerHTML = html;
+  document.getElementById('btn-fill-sales-contracts').addEventListener('click', fillContractsFromSales);
+}
+
+function fillContractsFromSales(){
+  const picked = Array.from(document.querySelectorAll('#sales-contracts-result .sc-pick:checked')).map(cb=>pulledSales_[+cb.dataset.i]).filter(Boolean);
+  if(!picked.length){ alert('ยังไม่ได้เลือกรายการ'); return; }
+  const ta = document.getElementById('contract-paste');
+  const have = new Set(ta.value.split('\n').map(l=>l.split(/[\t,\s]/)[0].trim()).filter(Boolean).map(normCodeJs_));
+  const add = picked.filter(p=>!have.has(normCodeJs_(p.code)));
+  if(add.length){
+    const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
+    ta.value += prefix + add.map(p=>`${p.code}\t${p.months}\t${p.inst}`).join('\n');
+  }
+  runContractCompare(); // ใช้ขั้นตอนเทียบ/ตัดสินใจ/บันทึกเดิมทั้งหมด
+  document.getElementById('contract-compare-result').scrollIntoView({behavior:'smooth', block:'start'});
+}
+document.getElementById('btn-pull-sales-contracts').addEventListener('click', loadSalesContracts);
 
 /* ===================== เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ) ===================== */
 // วางข้อมูล 3 ช่อง (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) แล้วเทียบกับประวัติจริงใน
@@ -2422,6 +2518,7 @@ document.querySelectorAll('.wr-subtabs button').forEach(btn=>{
     btn.classList.add('active');
     document.getElementById('wr-sub-'+btn.dataset.wrsub).classList.add('active');
     if(btn.dataset.wrsub==='return') loadPendingReturns();
+    if(btn.dataset.wrsub==='contracts' && salesLoadedFor_!==currentBranch) loadSalesContracts();
   });
 });
 
@@ -2550,7 +2647,6 @@ async function init(){
   populateBackfillDateSelects();
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
-  const pr = document.getElementById('pending-returns-result'); if(pr) pr.innerHTML = '';
   try{
     // ยิงทีละคำขอ ไม่ยิงพร้อมกัน — เคยลองยิงพร้อมกันทั้ง 4 ตัวเพื่อความเร็ว แต่พบว่า Apps Script
     // กั้นคำขอ (rate limit) เมื่อถูกยิงถี่เกินไปในเวลาสั้นๆ ทำให้ "เชื่อมต่อไม่สำเร็จ" เป็นประจำ
