@@ -2,187 +2,202 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f2d45c">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <title>ระบบตรวจสอบการชำระเงิน - Prototype</title>
 <style>
-  :root{
-    --bg:#f4f6f8;
-    --card:#ffffff;
-    --line:#e1e6ea;
-    --ink:#151e27;
-    --ink-2:#5c6773;
-    --ink-3:#8b96a1;
-    --navy:#0b335c;
-    --teal:#0c447c;
-    --teal-l:#e6f1fb;
-    --amber:#854f0b;
-    --amber-l:#faeeda;
-    --red:#a32d2d;
-    --red-l:#fcebeb;
-    --purple:#3c3489;
-    --purple-l:#eeedfe;
-    --gray-l:#eef1f4;
-    font-family: "Noto Sans Thai", -apple-system, "Segoe UI", sans-serif;
-  }
-  *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--ink);}
-  .wrap{max-width:1100px;margin:0 auto;padding:24px 20px 60px;}
-  .auth-overlay{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;}
-  .auth-box{background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px;width:100%;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.06);}
-  .auth-tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--line);}
-  .auth-tab{flex:1;background:none;border:none;padding:10px 0;font-size:13.5px;font-weight:600;color:var(--ink-3);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
-  .auth-tab.active{color:var(--teal);border-bottom-color:var(--teal);}
-  #login-form label, #register-form label{display:block;font-size:12px;color:var(--ink-2);margin:12px 0 4px;}
-  #login-form input, #register-form input{width:100%;padding:9px 11px;border:1.5px solid var(--line);border-radius:8px;font-size:14px;}
-  #login-form input:focus, #register-form input:focus{border-color:var(--teal);outline:none;box-shadow:0 0 0 3px var(--teal-l);}
-  .pw-field{position:relative;}
-  .pw-field input{padding-right:38px;}
-  .pw-toggle{position:absolute;right:2px;top:2px;bottom:2px;width:34px;border:none;background:none;cursor:pointer;font-size:15px;color:var(--ink-2);opacity:0.65;}
-  .pw-toggle:hover{opacity:1;}
-  .auth-error{color:var(--red);font-size:12.5px;margin:10px 0 0;min-height:16px;}
-  header.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;}
-  header.top h1{font-size:19px;font-weight:600;margin:0;color:var(--navy);}
-  header.top p{margin:2px 0 0;font-size:13px;color:var(--ink-2);}
-  .badge-live{font-size:11px;background:var(--teal-l);color:var(--teal);padding:3px 9px;border-radius:20px;font-weight:600;}
-  .conn-status{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:20px;}
-  .conn-status .dot{width:8px;height:8px;border-radius:50%;flex:none;}
-  .conn-status.connecting{background:var(--gray-l);color:var(--ink-2);}
-  .conn-status.connecting .dot{background:var(--ink-3);animation:pulse 1s infinite;}
-  .conn-status.connected{background:var(--teal-l);color:var(--teal);}
-  .conn-status.connected .dot{background:var(--teal);}
-  .conn-status.error{background:var(--red-l);color:var(--red);cursor:help;}
-  .conn-status.error .dot{background:var(--red);}
-  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.25;}}
-  nav.tabs{display:flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px;margin-bottom:20px;}
-  nav.tabs button{flex:1;border:none;background:transparent;padding:9px 6px;font-size:13.5px;border-radius:7px;cursor:pointer;color:var(--ink-2);font-weight:500;}
-  nav.tabs button.active{background:var(--navy);color:#fff;}
-  .wr-subtabs, .dash-subtabs{display:flex;gap:4px;background:var(--gray-l);border-radius:9px;padding:3px;margin-bottom:16px;flex-wrap:wrap;}
-  .wr-subtabs button, .dash-subtabs button{border:none;background:transparent;padding:7px 13px;font-size:12.5px;border-radius:7px;cursor:pointer;color:var(--ink-2);font-weight:500;white-space:nowrap;}
-  .wr-subtabs button.active, .dash-subtabs button.active{background:#fff;color:var(--navy);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:700;}
-  .wr-subpanel, .dash-subpanel{display:none;}
-  .wr-subpanel.active, .dash-subpanel.active{display:block;}
-  section.panel{display:none;}
-  section.panel.active{display:block;}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px;}
-  .card h2{font-size:14.5px;margin:0 0 12px;color:var(--navy);}
-  .formgrid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:end;}
-  .formgrid .full{grid-column:1/-1;}
-  label{display:block;font-size:11.5px;color:var(--ink-2);margin-bottom:4px;}
-  input{width:100%;padding:8px 9px;border:1px solid var(--line);border-radius:7px;font-size:13.5px;background:#fbfcfb;}
-  input:focus{outline:2px solid var(--teal);outline-offset:-1px;background:#fff;}
-  textarea{width:100%;padding:9px;border:1px solid var(--line);border-radius:7px;font-size:12.5px;font-family:ui-monospace,Consolas,monospace;background:#fbfcfb;resize:vertical;}
-  textarea:focus{outline:2px solid var(--teal);outline-offset:-1px;background:#fff;}
-  .result-ok{color:var(--teal);}
-  .result-err{color:var(--red);}
-  button.primary{background:var(--navy);color:#fff;border:none;padding:9px 16px;border-radius:7px;font-size:13.5px;cursor:pointer;font-weight:500;}
-  button.primary:hover{background:#0a2b29;}
-  button.ghost{background:transparent;border:1px solid var(--line);padding:7px 12px;border-radius:7px;font-size:12.5px;cursor:pointer;color:var(--ink-2);}
-  button.ghost:hover{border-color:var(--ink-3);}
-  table{width:100%;border-collapse:collapse;font-size:13px;}
-  th{text-align:left;padding:8px 8px;font-size:11.5px;color:var(--ink-2);border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap;}
-  td{padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
-  tr:last-child td{border-bottom:none;}
-  .pill{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600;white-space:nowrap;}
-  .p-green{background:var(--teal-l);color:var(--teal);}
-  .p-red{background:var(--red);color:#fff;font-weight:700;}
-  tr.row-issue{background:var(--red-l);}
-  tr.row-issue td:first-child{box-shadow:inset 3px 0 0 var(--red);}
-  .p-amber{background:var(--amber-l);color:var(--amber);}
-  .p-gray{background:var(--gray-l);color:var(--ink-2);}
-  .p-purple{background:var(--purple-l);color:var(--purple);}
-  .note{font-size:11.5px;color:var(--ink-2);margin-top:2px;}
-  .num{font-family:ui-monospace,Consolas,monospace;text-align:right;}
-  .del{background:none;border:none;color:var(--ink-3);cursor:pointer;font-size:15px;padding:2px 6px;}
-  .confirm-dup{background:#fff;border:1px solid var(--red);color:var(--red);font-size:11px;padding:3px 9px;border-radius:6px;cursor:pointer;margin-left:6px;font-weight:600;}
-  .confirm-dup:hover{background:var(--red-l);}
-  .undo-confirm-dup{background:none;border:none;color:var(--ink-3);font-size:11px;padding:3px 6px;cursor:pointer;margin-left:6px;text-decoration:underline;}
-  .undo-confirm-dup:hover{color:var(--red);}
-  .del:hover{color:var(--red);}
-  .empty{text-align:center;padding:40px 10px;color:var(--ink-3);font-size:13px;}
-  .statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
-  .stat{background:var(--gray-l);border-radius:10px;padding:12px 14px;}
-  .stat .lbl{font-size:11.5px;color:var(--ink-2);margin-bottom:4px;}
-  .stat .val{font-size:20px;font-weight:600;color:var(--navy);}
-  .cap-bar{height:8px;background:var(--gray-l);border-radius:5px;overflow:hidden;margin-top:6px;}
-  .cap-fill{height:100%;background:var(--teal);}
-  .cap-fill.warn{background:var(--amber);}
-  .cap-fill.danger{background:var(--red);}
-  .cap-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
-  .cap-row .cap-name{font-size:13px;font-weight:600;color:var(--ink);}
-  .cap-row .cap-pct{font-size:13px;font-weight:700;}
-  .cap-row .cap-pct.warn{color:var(--amber);}
-  .cap-row .cap-pct.danger{color:var(--red);}
-  .cap-note{font-size:11.5px;color:var(--ink-2);margin-top:4px;}
-  .cap-block{margin-bottom:16px;}
-  .cap-block:last-child{margin-bottom:0;}
-  .dash-hero{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
-  .dash-hero .num{font-size:30px;font-weight:700;color:var(--navy);line-height:1;}
-  .dash-hero .lbl{font-size:13px;color:var(--ink-2);}
-  .dash-hero .num.accent-bad{color:var(--red);}
-  .dash-hero .spacer{width:100%;height:0;}
-  .chiprow{display:flex;flex-wrap:wrap;gap:10px;}
-  .chip{background:var(--gray-l);border-radius:9px;padding:9px 13px;font-size:11.5px;color:var(--ink-2);min-width:104px;}
-  .chip .chip-val{display:block;font-weight:700;color:var(--navy);font-size:15px;margin-top:3px;font-family:ui-monospace,Consolas,monospace;}
-  .status-group{margin-bottom:16px;}
-  .status-group:last-child{margin-bottom:0;}
-  .status-group-lbl{font-size:11px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;}
-  .status-pills{display:flex;flex-wrap:wrap;gap:8px;}
-  .status-pill{display:flex;align-items:center;gap:7px;padding:8px 12px;border-radius:9px;font-size:12.5px;background:var(--gray-l);color:var(--ink-3);transition:opacity .15s;}
-  .status-pill .n{font-weight:700;font-size:14px;font-family:ui-monospace,Consolas,monospace;}
-  .status-pill.zero{opacity:.55;}
-  .status-pill.active-ok{background:var(--teal-l);color:var(--teal);}
-  .status-pill.active-bad{background:var(--red-l);color:var(--red);}
-  .banner{display:flex;align-items:center;gap:14px;padding:16px 18px;border-radius:12px;margin-bottom:14px;}
-  .banner.ok{background:var(--teal-l);}
-  .banner.bad{background:var(--red-l);}
-  .banner .icon{width:34px;height:34px;flex:none;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;color:#fff;}
-  .banner.ok .icon{background:var(--teal);}
-  .banner.bad .icon{background:var(--red);}
-  .banner .title{font-size:15px;font-weight:700;}
-  .banner.ok .title{color:var(--teal);}
-  .banner.bad .title{color:var(--red);}
-  .banner .sub{font-size:12px;color:var(--ink-2);margin-top:2px;}
-  .searchrow{display:flex;gap:10px;margin-bottom:12px;}
-  .searchrow input{flex:1;}
-  .filter-global-row{margin:12px 0 8px;}
-  .filter-global-row input{width:100%;font-size:14px;padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;}
-  .filter-global-row input:focus{border-color:var(--teal);outline:none;box-shadow:0 0 0 3px var(--teal-l);}
-  .filter-col-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
-  .filter-col-row input, .filter-col-row select{font-size:12.5px;padding:7px 9px;border:1.5px solid var(--line);border-radius:7px;background:var(--gray-l);flex:1 1 120px;min-width:100px;}
-  .filter-col-row input:focus, .filter-col-row select:focus{border-color:var(--teal);outline:none;background:#fff;}
-  .filter-col-row select{flex:1 1 170px;}
-  .filter-col-row .ghost{flex:0 0 auto;font-size:12.5px;padding:7px 12px;}
-  .searchrow input{flex:1;}
-  .scroll{max-height:480px;overflow:auto;border:1px solid var(--line);border-radius:8px;}
-  .scroll table{font-size:12.5px;}
-  .scroll th{position:sticky;top:0;background:#fbfcfb;}
-  .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}
-  .hint{font-size:12px;color:var(--ink-3);margin-top:8px;}
-
-  .card.accent-teal{border-top:3px solid var(--teal);}
-  .card.accent-purple{border-top:3px solid var(--purple);}
-  .card-icon{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;font-size:12px;margin-right:7px;vertical-align:-5px;}
-  .card-icon.teal{background:var(--teal-l);color:var(--teal);}
-  .card-icon.purple{background:var(--purple-l);color:var(--purple);}
-  .form-section-lbl{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em;margin:0 0 10px;}
-  .form-section-lbl:not(:first-child){margin-top:16px;}
-  .form-section-lbl .req-dot{width:6px;height:6px;border-radius:50%;background:var(--teal);}
-  .form-section-lbl.optional .req-dot{background:var(--ink-3);}
-  .form-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
-  label .req{color:var(--red);margin-left:2px;}
-  .form-row input{font-size:14px;padding:10px 11px;border:1.5px solid var(--line);border-radius:8px;transition:border-color .15s, box-shadow .15s, background .15s;}
-  .form-row input:hover{border-color:var(--ink-3);}
-  .form-row input:focus{border-color:var(--teal);outline:none;box-shadow:0 0 0 3px var(--teal-l);background:#fff;}
-  .form-row.optional input{background:var(--gray-l);}
-  .form-row.optional input:focus{background:#fff;}
-  .amt-field{position:relative;}
-  .amt-field input{padding-left:26px;}
-  .amt-field .prefix{position:absolute;left:11px;bottom:9px;color:var(--ink-3);font-size:13px;pointer-events:none;}
-  button.danger-ghost{background:#fff;border:1.5px solid var(--red-l);color:var(--red);padding:9px 16px;border-radius:7px;font-size:13.5px;cursor:pointer;font-weight:500;}
-  button.danger-ghost:hover{background:var(--red-l);}
-  button.primary{box-shadow:0 1px 2px rgba(15,61,58,.18);}
-  button.purple{background:var(--purple);color:#fff;border:none;padding:9px 16px;border-radius:7px;font-size:13.5px;cursor:pointer;font-weight:500;box-shadow:0 1px 2px rgba(60,52,137,.2);}
-  button.purple:hover{background:#2d2768;}
+:root{
+  --bg:#fbfbf6;--card:#fff;--line:#ebe9dd;
+  --ink:#1b211a;--ink-2:#5d6458;--ink-3:#8f948a;
+  --navy:#1b211a;            /* ดำเขียวเข้ม: ปุ่มหลัก/หัวข้อ */
+  --teal:#2f7a46;--teal-l:#e2f0da;   /* เขียว = ผลถูกต้อง */
+  --yellow:#f2d45c;--yellow-d:#d6b53a;--yellow-l:#fbf0c4;
+  --amber:#8a5a0b;--amber-l:#fbecc8;
+  --red:#b03a2e;--red-l:#fbe4df;
+  --purple:#5a4bb5;--purple-l:#ece9fb;
+  --gray-l:#f1f0e6;
+  --brand:var(--ink);--brand-text:var(--yellow);--on-accent:var(--ink);
+  --edge:0 3px 0 rgba(27,33,26,.07),0 10px 24px -12px rgba(27,33,26,.18);
+  --r:18px;
+  font-family:"Anuphan","Noto Sans Thai",-apple-system,"Segoe UI",sans-serif;
+}
+/* ---------- สีประจำสาขา (ตั้งค่าที่ <html data-branch>) ---------- */
+html[data-branch=trang]{--yellow:#f7a24f;--yellow-d:#d97a24;--yellow-l:#fde5cc;}
+html[data-branch=samui]{--yellow:#86cc7f;--yellow-d:#4f9f4e;--yellow-l:#def1da;}
+html[data-branch=surat]{--yellow:#72b8ec;--yellow-d:#3b8fd0;--yellow-l:#dcecfa;}
+html[data-branch=langsuan]{--yellow:#f2d45c;--yellow-d:#d6b53a;--yellow-l:#fbf0c4;}
+html[data-branch=maesot]{--yellow:#f2d45c;--yellow-d:#d6b53a;--yellow-l:#fbf0c4;--brand:#1d3a8a;--brand-text:#f2d45c;--on-accent:#1d3a8a;--ink:#16224d;}
+*{box-sizing:border-box;}
+body{margin:0;background:radial-gradient(900px 420px at 85% -10%,var(--yellow-l),transparent 70%),var(--bg);color:var(--ink);line-height:1.5;}
+.wrap{max-width:1100px;margin:0 auto;padding:20px 18px 70px;}
+:focus-visible{outline:3px solid var(--yellow-d);outline-offset:2px;}
+/* ---------- login ---------- */
+.auth-overlay{position:fixed;inset:0;background:radial-gradient(700px 400px at 20% 0%,var(--yellow-l),transparent 70%),var(--bg);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;}
+.auth-box{background:#fff;border-radius:26px;padding:30px 28px;width:100%;max-width:380px;box-shadow:var(--edge);}
+.auth-box h1{margin:0 0 4px;font-size:24px;line-height:1.25;}
+.auth-tabs{display:flex;gap:4px;margin-bottom:18px;background:var(--gray-l);border-radius:999px;padding:4px;}
+.auth-tab{flex:1;background:none;border:none;padding:9px 0;font:600 13.5px inherit;font-family:inherit;color:var(--ink-2);cursor:pointer;border-radius:999px;}
+.auth-tab.active{background:var(--yellow);color:var(--on-accent);box-shadow:0 2px 0 var(--yellow-d);}
+#login-form label,#register-form label{display:block;font-size:12.5px;color:var(--ink-2);margin:12px 0 4px;}
+#login-form input,#register-form input,#register-form select{width:100%;padding:11px 13px;border:2px solid var(--line);border-radius:12px;font:inherit;font-size:14px;background:#fff;}
+#login-form input:focus,#register-form input:focus,#register-form select:focus{border-color:var(--yellow-d);outline:none;box-shadow:0 0 0 4px var(--yellow-l);}
+.pw-field{position:relative;}.pw-field input{padding-right:42px;}
+.pw-toggle{position:absolute;right:4px;top:4px;bottom:4px;width:34px;border:none;background:none;cursor:pointer;font-size:15px;opacity:.6;}
+.pw-toggle:hover{opacity:1;}
+.auth-error{color:var(--red);font-size:12.5px;margin:10px 0 0;min-height:16px;}
+#btn-forgot-password{color:var(--ink-2);}
+/* ---------- header ---------- */
+header.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#fff;border-radius:999px;padding:12px 14px 12px 24px;margin-bottom:14px;box-shadow:var(--edge);}
+header.top h1{font-size:18px;font-weight:700;margin:0;color:var(--ink);}
+html[data-branch=maesot] header.top{box-shadow:inset 0 -4px 0 var(--brand),var(--edge);}
+header.top p{margin:0;font-size:12.5px;color:var(--ink-2);}
+.badge-live{font-size:11px;background:var(--yellow);color:var(--on-accent);padding:2px 10px;border-radius:999px;font-weight:700;vertical-align:2px;}
+select{font-family:inherit;color:var(--ink);}
+#branch-switcher{padding:8px 14px!important;border:2px solid var(--yellow-d)!important;border-radius:999px!important;background:var(--yellow-l)!important;font-weight:600;}
+.conn-status{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;padding:7px 14px;border-radius:999px;}
+.conn-status .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+.conn-status.connecting{background:var(--gray-l);color:var(--ink-2);}
+.conn-status.connecting .dot{background:var(--ink-3);animation:pulse 1s infinite;}
+.conn-status.connected{background:var(--teal-l);color:var(--teal);}
+.conn-status.connected .dot{background:var(--teal);}
+.conn-status.error{background:var(--red-l);color:var(--red);cursor:help;}
+.conn-status.error .dot{background:var(--red);}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+/* ---------- tabs ---------- */
+nav.tabs{display:flex;gap:4px;background:#fff;border-radius:999px;padding:5px;margin-bottom:20px;box-shadow:var(--edge);overflow-x:auto;}
+nav.tabs button{flex:1;border:none;background:transparent;padding:10px 14px;font:600 14px inherit;font-family:inherit;border-radius:999px;cursor:pointer;color:var(--ink-2);white-space:nowrap;}
+nav.tabs button:hover{background:var(--gray-l);}
+nav.tabs button.active{background:var(--yellow);color:var(--on-accent);box-shadow:0 3px 0 var(--yellow-d);}
+.wr-subtabs,.dash-subtabs{display:flex;gap:4px;background:var(--gray-l);border-radius:999px;padding:4px;margin-bottom:16px;flex-wrap:wrap;}
+.wr-subtabs button,.dash-subtabs button{border:none;background:transparent;padding:8px 15px;font:600 13px inherit;font-family:inherit;border-radius:999px;cursor:pointer;color:var(--ink-2);white-space:nowrap;}
+.wr-subtabs button.active,.dash-subtabs button.active{background:var(--brand);color:var(--brand-text);}
+.wr-subpanel,.dash-subpanel,section.panel{display:none;}
+.wr-subpanel.active,.dash-subpanel.active,section.panel.active{display:block;}
+/* ---------- cards ---------- */
+.card{background:var(--card);border-radius:var(--r);padding:20px 22px;margin-bottom:16px;box-shadow:var(--edge);}
+.card h2{font-size:16px;font-weight:700;margin:0 0 12px;color:var(--ink);}
+.card.accent-teal{background:linear-gradient(180deg,var(--yellow-l),#fff 55%);}
+.card.accent-purple{background:linear-gradient(180deg,var(--purple-l),#fff 55%);}
+.card-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9px;font-size:13px;margin-right:8px;vertical-align:-7px;background:var(--brand);color:var(--brand-text);}
+.card-icon.purple{background:var(--purple);color:#fff;}
+.toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+.hint{font-size:12.5px;color:var(--ink-3);margin-top:8px;}
+.note{font-size:12px;color:var(--ink-2);margin-top:2px;}
+/* ---------- forms ---------- */
+label{display:block;font-size:12.5px;font-weight:500;color:var(--ink-2);margin-bottom:5px;}
+input,select{width:100%;padding:10px 12px;border:2px solid var(--line);border-radius:12px;font:inherit;font-size:14px;background:#fff;color:var(--ink);}
+input[type=checkbox]{width:auto;}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--yellow-d);box-shadow:0 0 0 4px var(--yellow-l);}
+textarea{width:100%;padding:11px;border:2px solid var(--line);border-radius:12px;font-size:12.5px;font-family:ui-monospace,Consolas,monospace;background:#fff;resize:vertical;}
+.form-section-lbl{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--ink);margin:0 0 10px;}
+.form-section-lbl:not(:first-child){margin-top:18px;}
+.form-section-lbl .req-dot{width:22px;height:22px;border-radius:7px;background:var(--brand);position:relative;}
+.form-section-lbl .req-dot::after{content:"";position:absolute;inset:7px;border-radius:50%;background:var(--brand-text);}
+.form-section-lbl.optional .req-dot{background:var(--gray-l);}
+.form-section-lbl.optional .req-dot::after{background:var(--ink-3);}
+.form-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+label .req{color:var(--red);margin-left:2px;}
+.form-row.optional input{background:var(--gray-l);}
+.form-row.optional input:focus{background:#fff;}
+.amt-field{position:relative;}
+.amt-field input{padding-left:28px;}
+.amt-field .prefix{position:absolute;left:12px;bottom:11px;color:var(--ink-3);font-size:13px;pointer-events:none;}
+.searchrow{display:flex;gap:10px;margin-bottom:12px;}
+.searchrow input{flex:1;}
+.filter-global-row{margin:12px 0 8px;}
+.filter-global-row input{font-size:14px;padding:11px 14px;border-radius:999px;}
+.filter-col-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+.filter-col-row input,.filter-col-row select{font-size:12.5px;padding:8px 11px;border-radius:999px;background:var(--gray-l);border-color:transparent;flex:1 1 120px;min-width:100px;}
+.filter-col-row select{flex:1 1 180px;}
+.filter-col-row input:focus,.filter-col-row select:focus{background:#fff;}
+/* ---------- buttons (ปุ่มนูนมีขอบล่าง) ---------- */
+button{font-family:inherit;}
+button.primary{background:var(--yellow);color:var(--on-accent);border:none;padding:11px 20px;border-radius:999px;font-size:14px;cursor:pointer;font-weight:700;box-shadow:0 4px 0 var(--yellow-d);transition:transform .08s,box-shadow .08s;}
+button.primary:hover{filter:brightness(1.06);}
+button.primary:active{transform:translateY(3px);box-shadow:0 1px 0 var(--yellow-d);}
+button.primary:disabled,button.purple:disabled{opacity:.5;cursor:not-allowed;}
+button.purple{background:var(--purple);color:#fff;border:none;padding:11px 20px;border-radius:999px;font-size:14px;cursor:pointer;font-weight:700;box-shadow:0 4px 0 #3f3490;}
+button.purple:active{transform:translateY(3px);box-shadow:0 1px 0 #3f3490;}
+button.ghost{background:#fff;border:2px solid var(--line);padding:7px 14px;border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--ink-2);}
+button.ghost:hover{border-color:var(--ink);color:var(--ink);}
+button.danger-ghost{background:#fff;border:2px solid var(--red-l);color:var(--red);padding:9px 18px;border-radius:999px;font-size:13.5px;cursor:pointer;font-weight:600;}
+button.danger-ghost:hover{background:var(--red-l);}
+/* ---------- tables ---------- */
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;padding:10px 9px;font-size:12px;color:var(--ink-2);border-bottom:2px solid var(--line);font-weight:700;white-space:nowrap;}
+td{padding:10px 9px;border-bottom:1px solid var(--line);vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+.num{font-variant-numeric:tabular-nums;text-align:right;}
+.scroll{max-height:480px;overflow:auto;border-radius:14px;background:#fff;box-shadow:inset 0 0 0 2px var(--line);}
+.scroll table{font-size:12.5px;}
+.scroll th{position:sticky;top:0;background:var(--yellow-l);}
+tr.row-issue{background:var(--red-l);}
+tr.row-issue td:first-child{box-shadow:inset 4px 0 0 var(--red);}
+.pill{display:inline-block;padding:3px 11px;border-radius:999px;font-size:12px;font-weight:700;white-space:nowrap;}
+.p-green{background:var(--teal-l);color:var(--teal);}
+.p-red{background:var(--red);color:#fff;}
+.p-amber{background:var(--amber-l);color:var(--amber);}
+.p-gray{background:var(--gray-l);color:var(--ink-2);}
+.p-purple{background:var(--purple-l);color:var(--purple);}
+.del{background:none;border:none;color:var(--ink-3);cursor:pointer;font-size:18px;padding:2px 8px;border-radius:8px;}
+.del:hover{color:var(--red);background:var(--red-l);}
+.confirm-dup{background:#fff;border:2px solid var(--red);color:var(--red);font-size:11.5px;padding:2px 10px;border-radius:999px;cursor:pointer;margin-left:6px;font-weight:700;}
+.confirm-dup:hover{background:var(--red-l);}
+.undo-confirm-dup{background:none;border:none;color:var(--ink-3);font-size:11.5px;padding:3px 6px;cursor:pointer;margin-left:6px;text-decoration:underline;}
+.undo-confirm-dup:hover{color:var(--red);}
+.empty{text-align:center;padding:40px 10px;color:var(--ink-3);font-size:13.5px;}
+.result-ok{color:var(--teal);}.result-err{color:var(--red);}
+/* ---------- dashboard ---------- */
+.statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+.stat{background:var(--gray-l);border-radius:14px;padding:12px 14px;}
+.stat .lbl{font-size:12px;color:var(--ink-2);margin-bottom:4px;}
+.stat .val{font-size:20px;font-weight:700;}
+.dash-hero{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:16px;}
+.dash-hero .num{font-size:38px;font-weight:800;color:var(--ink);line-height:1.1;text-align:left;background:linear-gradient(transparent 58%,var(--yellow) 58%);padding:0 6px;border-radius:4px;}
+.dash-hero .lbl{font-size:14px;color:var(--ink-2);}
+.dash-hero .num.accent-bad{background:linear-gradient(transparent 58%,var(--red-l) 58%);color:var(--red);}
+.chiprow{display:flex;flex-wrap:wrap;gap:10px;}
+.chip{background:var(--gray-l);border-radius:14px;padding:10px 15px;font-size:12px;color:var(--ink-2);min-width:112px;}
+.chip .chip-val{display:block;font-weight:800;color:var(--ink);font-size:17px;margin-top:2px;font-variant-numeric:tabular-nums;}
+.status-group{margin-bottom:16px;}.status-group:last-child{margin-bottom:0;}
+.status-group-lbl{font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:8px;}
+.status-pills{display:flex;flex-wrap:wrap;gap:8px;}
+.status-pill{display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;font-size:13px;background:var(--gray-l);color:var(--ink-3);}
+.status-pill .n{font-weight:800;font-size:15px;font-variant-numeric:tabular-nums;}
+.status-pill.zero{opacity:.55;}
+.status-pill.active-ok{background:var(--teal-l);color:var(--teal);}
+.status-pill.active-bad{background:var(--red-l);color:var(--red);}
+.banner{display:flex;align-items:center;gap:14px;padding:16px 18px;border-radius:16px;margin-bottom:14px;}
+.banner.ok{background:var(--teal-l);}.banner.bad{background:var(--red-l);}
+.banner .icon{width:36px;height:36px;flex:none;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;color:#fff;}
+.banner.ok .icon{background:var(--teal);}.banner.bad .icon{background:var(--red);}
+.banner .title{font-size:15px;font-weight:700;}
+.banner.ok .title{color:var(--teal);}.banner.bad .title{color:var(--red);}
+.banner .sub{font-size:12.5px;color:var(--ink-2);margin-top:2px;}
+.cap-bar{height:10px;background:var(--gray-l);border-radius:6px;overflow:hidden;margin-top:6px;}
+.cap-fill{height:100%;background:var(--teal);border-radius:6px;}
+.cap-fill.warn{background:var(--yellow-d);}.cap-fill.danger{background:var(--red);}
+.cap-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;}
+.cap-row .cap-name{font-size:13.5px;font-weight:700;}
+.cap-row .cap-pct{font-size:13.5px;font-weight:800;}
+.cap-row .cap-pct.warn{color:var(--amber);}.cap-row .cap-pct.danger{color:var(--red);}
+.cap-note{font-size:12px;color:var(--ink-2);margin-top:4px;}
+.cap-block{margin-bottom:16px;}.cap-block:last-child{margin-bottom:0;}
+/* ---------- mobile ---------- */
+@media(max-width:720px){
+  .wrap{padding:12px 10px 60px;}
+  header.top{border-radius:22px;padding:14px 16px;}
+  .form-row{grid-template-columns:1fr;}
+  .statgrid{grid-template-columns:repeat(2,1fr);}
+  .dash-hero .num{font-size:30px;}
+  .card{padding:16px;}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
 </style>
+
 </head>
 <body>
 
@@ -272,17 +287,6 @@
   </nav>
 
   <section class="panel active" id="panel-check">
-    <div class="card accent-teal" id="fix-requests-card" style="display:none;">
-      <div class="toolbar">
-        <h2 style="margin:0;">แจ้งแก้ไขจากระบบปิดยอด <span class="pill p-red" id="fix-requests-count" style="margin-left:6px;"></span></h2>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <label style="margin:0;display:flex;align-items:center;gap:5px;font-size:12px;"><input type="checkbox" id="fix-show-done" style="width:auto;"> แสดงที่แก้แล้ว</label>
-          <button class="ghost" id="btn-refresh-fix-requests">↻ โหลดใหม่</button>
-        </div>
-      </div>
-      <p class="hint" style="margin:0 0 10px;">รายการที่พนักงานแจ้งแก้ไขไว้ในระบบปิดยอด (14 วันล่าสุด) เช่น รหัสลูกค้า งวดที่ จำนวนเงินที่คีย์ผิด เลขบรรทัดแสดงตามที่พนักงานกรอก ตรวจกับ Working Reference ด้วยตา แก้เสร็จแล้วกด "แก้แล้ว"</p>
-      <div id="fix-requests-result"></div>
-    </div>
     <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div style="display:flex;align-items:center;gap:8px;">
         <label style="margin:0;white-space:nowrap;">วันที่ทำรายการ</label>
@@ -494,14 +498,6 @@
         </div>
         <p class="hint" style="margin:0 0 10px;">เทียบรหัสลูกค้าทั้งหมดใน Working Reference กับข้อมูลสัญญาที่เคยบันทึกไว้ — รหัสไหนมีประวัติผ่อนจริงแต่ยังไม่เคยบันทึกข้อมูลสัญญาเลย จะขึ้นในรายการนี้ (เรียงจากลูกค้าที่มีประวัติเยอะสุดก่อน)</p>
         <div id="missing-contracts-result"></div>
-      </div>
-      <div class="card accent-teal">
-        <div class="toolbar">
-          <h2 style="margin:0;">ดึงสัญญาจากรายการขายในระบบปิดยอด</h2>
-          <button class="ghost" id="btn-pull-sales-contracts">↻ ดึงข้อมูล (90 วันล่าสุด)</button>
-        </div>
-        <p class="hint" style="margin:0 0 10px;">อ่านรายการขายผ่อน (รหัส + ค่างวด + จำนวนงวด) ที่พนักงานบันทึกไว้ในระบบปิดยอด แล้วเลือกรายการเพื่อส่งไปช่องเทียบด้านล่าง ยังไม่บันทึกจนกว่าจะกดบันทึกในขั้นตอนเทียบ ตรวจค่าที่คีย์ด้วยตาเสมอ เพราะลูกค้าใหม่ยังไม่มีประวัติให้เทียบ</p>
-        <div id="sales-contracts-result"></div>
       </div>
       <div class="card accent-purple">
         <h2><span class="card-icon purple">📄</span>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</h2>
@@ -2193,11 +2189,9 @@ function renderMissingContracts(){
     return;
   }
   let html = `<p class="note" style="margin:0 0 10px;">พบ ${missing.length.toLocaleString()} รหัสที่ยังไม่มีข้อมูลสัญญา</p>
-    <div class="scroll" style="max-height:320px;"><table><thead><tr><th>รหัสลูกค้า</th><th class="num">จำนวนแถวประวัติใน WR</th><th>พบในระบบปิดยอด</th><th></th></tr></thead><tbody>`;
+    <div class="scroll" style="max-height:320px;"><table><thead><tr><th>รหัสลูกค้า</th><th class="num">จำนวนแถวประวัติใน WR</th><th></th></tr></thead><tbody>`;
   missing.forEach(([code, count])=>{
-    const hint = salesHintFor_(code);
-    const hintCell = hint ? `${hint.months} งวด × ${fmt(hint.inst)}` : '<span class="note">-</span>';
-    html += `<tr><td>${code}</td><td class="num">${count}</td><td>${hintCell}</td><td><button class="ghost btn-fill-contract-code" data-code="${code}">➕ กรอกสัญญา</button></td></tr>`;
+    html += `<tr><td>${code}</td><td class="num">${count}</td><td><button class="ghost btn-fill-contract-code" data-code="${code}">➕ กรอกสัญญา</button></td></tr>`;
   });
   html += '</tbody></table></div>';
   resultEl.innerHTML = html;
@@ -2208,166 +2202,11 @@ function renderMissingContracts(){
       const ta = document.getElementById('contract-paste');
       // เติมรหัสลงช่องวางข้อมูลสัญญาให้เลย (เว้นช่องจำนวนงวด/ยอดไว้ให้กรอกเอง) ต่อท้ายบรรทัดเดิมถ้ามี
       const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
-      const hint = salesHintFor_(code);
-      ta.value += hint ? `${prefix}${code}\t${hint.months}\t${hint.inst}` : `${prefix}${code}\t\t`;
+      ta.value += `${prefix}${code}\t\t`;
       ta.focus();
     });
   });
 }
-
-/* ===================== แจ้งแก้ไขจากระบบปิดยอด ===================== */
-async function loadFixRequests(){
-  const card = document.getElementById('fix-requests-card');
-  const el = document.getElementById('fix-requests-result');
-  const showDone = document.getElementById('fix-show-done').checked;
-  const branchAtStart = currentBranch;
-  try{
-    const data = await apiGet('getFixRequests', {includeDone: showDone ? '1' : ''});
-    if(branchAtStart !== currentBranch) return; // สลับสาขาระหว่างรอ
-    renderFixRequests(data, showDone);
-  }catch(e){
-    console.warn('โหลดรายการแก้ไขจากระบบปิดยอดไม่สำเร็จ:', e.message);
-  }
-}
-
-function renderFixRequests(data, showDone){
-  const card = document.getElementById('fix-requests-card');
-  const el = document.getElementById('fix-requests-result');
-  const countEl = document.getElementById('fix-requests-count');
-  if(data.problem){
-    card.style.display = '';
-    countEl.style.display = 'none';
-    el.innerHTML = `<p class="note">ดึงรายการแก้ไขจากระบบปิดยอดไม่ได้: ${escHtml_(data.problem)}</p>`;
-    return;
-  }
-  const items = data.items || [];
-  const pending = items.filter(it=>!it.done);
-  // ซ่อนการ์ดทั้งใบเมื่อไม่มีอะไรค้าง (ยกเว้นกำลังเปิดดูที่แก้แล้ว)
-  if(items.length===0 && !showDone){ card.style.display = 'none'; return; }
-  card.style.display = '';
-  countEl.style.display = pending.length ? '' : 'none';
-  countEl.textContent = pending.length ? `ค้าง ${pending.length}` : '';
-  if(items.length===0){ el.innerHTML = '<div class="empty">ไม่มีรายการแก้ไขใน 14 วันล่าสุด</div>'; return; }
-  let html = `<div class="scroll" style="max-height:320px;"><table><thead><tr>
-    <th>วันที่แจ้ง</th><th>บรรทัดที่</th><th>ใส่อะไรผิด</th><th>จาก</th><th>ต้องเป็น</th><th></th>
-  </tr></thead><tbody>`;
-  items.forEach(it=>{
-    const lines = (it.lines||[]).map(escHtml_).join(', ') || '-';
-    const action = it.done
-      ? `<span class="pill p-green">แก้แล้ว</span><div class="note">${escHtml_(it.doneBy||'')}${it.doneAt ? ' · '+new Date(it.doneAt).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : ''}</div>`
-      : `<button class="ghost btn-fix-done" data-id="${escHtml_(it.id)}">แก้แล้ว</button>`;
-    html += `<tr${it.done?' style="opacity:.6;"':''}>
-      <td>${fmtDateKey_(it.dateKey)}</td>
-      <td>${lines}</td>
-      <td>${escHtml_(it.field||'-')}</td>
-      <td>${escHtml_(it.from||'-')}</td>
-      <td>${escHtml_(it.to||'-')}</td>
-      <td style="white-space:nowrap;">${action}</td>
-    </tr>`;
-  });
-  html += '</tbody></table></div>';
-  el.innerHTML = html;
-  el.querySelectorAll('.btn-fix-done').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
-      try{
-        await apiGet('markFixDone', {id: btn.dataset.id});
-        logActivity('กดแก้แล้ว (รายการแก้ไขจากระบบปิดยอด)', btn.dataset.id);
-      }catch(e){
-        alert('บันทึกไม่สำเร็จ: ' + e.message);
-      }
-      loadFixRequests();
-    });
-  });
-}
-document.getElementById('btn-refresh-fix-requests').addEventListener('click', loadFixRequests);
-document.getElementById('fix-show-done').addEventListener('change', loadFixRequests);
-
-/* ===================== ดึงสัญญาจากรายการขายในระบบปิดยอด ===================== */
-let SALES_HINTS = {};          // รหัส (ตัดศูนย์นำหน้า) -> {months, inst} เฉพาะรหัสที่ยังไม่มีสัญญา
-let SALES_HINTS_BRANCH = '';   // สาขาที่ hints ชุดนี้เป็นของ
-let salesLoadedFor_ = '';      // สาขาที่โหลดอัตโนมัติไปแล้ว
-let pulledSales_ = [];
-const normCodeJs_ = c => String(c==null?'':c).trim().replace(/^0+(?=\d)/,'');
-function salesHintFor_(code){
-  return SALES_HINTS_BRANCH===currentBranch ? (SALES_HINTS[normCodeJs_(code)] || null) : null;
-}
-
-async function loadSalesContracts(){
-  const el = document.getElementById('sales-contracts-result');
-  el.innerHTML = '<div class="empty">กำลังโหลด...</div>';
-  const branchAtStart = currentBranch;
-  try{
-    const data = await apiGet('getSalesContracts', {days: 90});
-    if(branchAtStart !== currentBranch) return; // สลับสาขาระหว่างรอ
-    salesLoadedFor_ = branchAtStart;
-    renderSalesContracts(data);
-    if(!data.problem){
-      SALES_HINTS = {}; SALES_HINTS_BRANCH = branchAtStart;
-      (data.items||[]).filter(it=>it.status==='new').forEach(it=>{ SALES_HINTS[normCodeJs_(it.code)] = {months: it.months, inst: it.inst}; });
-      renderMissingContracts();
-    }
-  }catch(e){
-    el.innerHTML = `<div class="empty">โหลดไม่สำเร็จ: ${escHtml_(e.message)}</div>`;
-  }
-}
-
-function renderSalesContracts(data){
-  const el = document.getElementById('sales-contracts-result');
-  if(data.problem){
-    el.innerHTML = `<div class="banner bad"><div class="icon">!</div><div><div class="title">อ่านข้อมูลจากระบบปิดยอดไม่ได้</div><div class="sub">${escHtml_(data.problem)}</div></div></div>`;
-    return;
-  }
-  pulledSales_ = data.items || [];
-  const skipNote = [];
-  if(data.sameCount) skipNote.push(`ตรงกับสัญญาเดิมแล้ว ${data.sameCount} รหัส`);
-  if(data.returnedSkipped) skipNote.push(`ข้าม ${data.returnedSkipped} รหัสที่คืนเครื่องแล้ว`);
-  const extra = skipNote.length ? `<p class="note" style="margin:0 0 10px;">${skipNote.join(' · ')}</p>` : '';
-  if(pulledSales_.length===0){
-    el.innerHTML = extra + '<div class="empty">ไม่มีรายการขายใหม่ที่ต้องนำเข้าสัญญาในช่วง 90 วันล่าสุด</div>';
-    return;
-  }
-  let html = extra + `<p class="note" style="margin:0 0 10px;">พบ ${pulledSales_.length} รหัส (ติ๊กไว้ล่วงหน้าเฉพาะรหัสที่ยังไม่มีสัญญาและไม่มีข้อสังเกต)</p>
-    <div class="scroll" style="max-height:340px;"><table><thead><tr>
-      <th></th><th>รหัส</th><th class="num">จำนวนงวด</th><th class="num">ค่างวด</th><th>วันที่ขาย</th><th>รุ่น</th><th>สถานะ / หมายเหตุ</th>
-    </tr></thead><tbody>`;
-  pulledSales_.forEach((it,i)=>{
-    const notes = [];
-    if(it.status==='diff') notes.push(`<span class="pill p-amber">มีสัญญาเดิม</span> <span class="note">เดิม ${it.existingMonths} งวด / ${fmt(it.existingInst)} บาท — บันทึกใหม่จะเขียนทับ</span>`);
-    else notes.push('<span class="pill p-green">ยังไม่มีสัญญา</span>');
-    if(it.multiple) notes.push('<div class="note" style="color:var(--amber);">พบหลายรายการขายของรหัสนี้ค่าต่างกัน ใช้รายการล่าสุด ตรวจด้วยตา</div>');
-    if(!it.inWR) notes.push('<div class="note">ยังไม่มีประวัติใน Working Reference</div>');
-    const checked = (it.status==='new' && !it.multiple) ? ' checked' : '';
-    html += `<tr>
-      <td><input type="checkbox" class="sc-pick" data-i="${i}"${checked} style="width:auto;"></td>
-      <td>${escHtml_(it.code)}</td>
-      <td class="num">${it.months}</td>
-      <td class="num">${fmt(it.inst)}</td>
-      <td>${fmtDateKey_(it.saleDateKey)}</td>
-      <td>${escHtml_(it.model)}</td>
-      <td>${notes.join('')}</td>
-    </tr>`;
-  });
-  html += `</tbody></table></div>
-    <div style="margin-top:12px;"><button class="primary" id="btn-fill-sales-contracts">เพิ่มรายการที่เลือกลงช่องเทียบด้านล่าง</button></div>`;
-  el.innerHTML = html;
-  document.getElementById('btn-fill-sales-contracts').addEventListener('click', fillContractsFromSales);
-}
-
-function fillContractsFromSales(){
-  const picked = Array.from(document.querySelectorAll('#sales-contracts-result .sc-pick:checked')).map(cb=>pulledSales_[+cb.dataset.i]).filter(Boolean);
-  if(!picked.length){ alert('ยังไม่ได้เลือกรายการ'); return; }
-  const ta = document.getElementById('contract-paste');
-  const have = new Set(ta.value.split('\n').map(l=>l.split(/[\t,\s]/)[0].trim()).filter(Boolean).map(normCodeJs_));
-  const add = picked.filter(p=>!have.has(normCodeJs_(p.code)));
-  if(add.length){
-    const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
-    ta.value += prefix + add.map(p=>`${p.code}\t${p.months}\t${p.inst}`).join('\n');
-  }
-  runContractCompare(); // ใช้ขั้นตอนเทียบ/ตัดสินใจ/บันทึกเดิมทั้งหมด
-  document.getElementById('contract-compare-result').scrollIntoView({behavior:'smooth', block:'start'});
-}
-document.getElementById('btn-pull-sales-contracts').addEventListener('click', loadSalesContracts);
 
 /* ===================== เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ) ===================== */
 // วางข้อมูล 3 ช่อง (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) แล้วเทียบกับประวัติจริงใน
@@ -2597,7 +2436,6 @@ document.querySelectorAll('.wr-subtabs button').forEach(btn=>{
     btn.classList.add('active');
     document.getElementById('wr-sub-'+btn.dataset.wrsub).classList.add('active');
     if(btn.dataset.wrsub==='return') loadPendingReturns();
-    if(btn.dataset.wrsub==='contracts' && salesLoadedFor_!==currentBranch) loadSalesContracts();
   });
 });
 
@@ -2726,7 +2564,6 @@ async function init(){
   populateBackfillDateSelects();
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
-  document.getElementById('fix-requests-card').style.display = 'none';
   try{
     // ยิงทีละคำขอ ไม่ยิงพร้อมกัน — เคยลองยิงพร้อมกันทั้ง 4 ตัวเพื่อความเร็ว แต่พบว่า Apps Script
     // กั้นคำขอ (rate limit) เมื่อถูกยิงถี่เกินไปในเวลาสั้นๆ ทำให้ "เชื่อมต่อไม่สำเร็จ" เป็นประจำ
@@ -2751,7 +2588,6 @@ async function init(){
   }
   renderCheckTable();
   renderDashboard();
-  loadFixRequests(); // ไม่รอผล ไม่ให้ช้าตอนเปิดเว็บ
 }
 
 /* ===================== ระบบล็อกอิน / สมัครสมาชิก / บันทึกกิจกรรม ===================== */
@@ -2769,8 +2605,16 @@ let currentBranch = readBranch_('payment_check_branch', sessionStorage)
 // ผูกสาขาเริ่มต้นเข้ากับแท็บนี้ทันที — ไม่งั้นถ้ารีโหลดก่อนเคยสลับสาขา จะไปอ่าน localStorage
 // ที่แท็บอื่นอาจเปลี่ยนไปแล้วระหว่างนั้น
 try{ sessionStorage.setItem('payment_check_branch', currentBranch); }catch(e){}
+const BRANCH_THEME_COLORS = { surat:'#72b8ec', samui:'#86cc7f', langsuan:'#f2d45c', trang:'#f7a24f', maesot:'#f2d45c' };
+function applyBranchTheme_(){
+  document.documentElement.dataset.branch = currentBranch;
+  const m = document.querySelector('meta[name=theme-color]');
+  if(m) m.setAttribute('content', BRANCH_THEME_COLORS[currentBranch] || '#f2d45c');
+}
+applyBranchTheme_(); // ใช้สีของสาขาที่จำไว้ตั้งแต่หน้าล็อกอิน
 function setCurrentBranch(b){
   currentBranch = b;
+  applyBranchTheme_();
   try{ sessionStorage.setItem('payment_check_branch', b); }catch(e){}
   try{ localStorage.setItem('payment_check_branch', b); }catch(e){}
 }
@@ -2808,6 +2652,7 @@ function enterApp(user){
   const branches = user.branches && user.branches.length ? user.branches
     : (user.isAdmin ? Object.keys(BRANCH_LABELS) : ['surat']);
   if(!branches.includes(currentBranch)) setCurrentBranch(branches[0]);
+  applyBranchTheme_();
 
   document.getElementById('auth-overlay').style.display = 'none';
   document.getElementById('main-wrap').style.display = '';
