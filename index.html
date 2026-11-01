@@ -144,6 +144,16 @@ tr.row-issue td:first-child{box-shadow:inset 4px 0 0 var(--red);}
 .p-purple{background:var(--purple-l);color:var(--purple);}
 .del{background:none;border:none;color:var(--ink-3);cursor:pointer;font-size:18px;padding:2px 8px;border-radius:8px;}
 .del:hover{color:var(--red);background:var(--red-l);}
+.mv{background:none;border:none;color:var(--ink-2);cursor:pointer;font-size:12px;padding:3px 6px;border-radius:8px;line-height:1;}
+.mv:hover:not(:disabled){background:var(--yellow-l);color:var(--ink);}
+.mv:disabled{opacity:.25;cursor:default;}
+.drag-h{cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;color:var(--ink-3);margin-right:6px;font-size:15px;line-height:1;}
+.drag-h:hover{color:var(--ink);}
+tr.dragging{opacity:.45;}
+tr.drop-before td{box-shadow:inset 0 3px 0 var(--yellow-d)!important;}
+tr.drop-after td{box-shadow:inset 0 -3px 0 var(--yellow-d)!important;}
+.seq-jump{cursor:pointer;border-bottom:1px dashed var(--ink-3);}
+.seq-jump:hover{color:var(--ink);border-bottom-color:var(--ink);}
 .confirm-dup{background:#fff;border:2px solid var(--red);color:var(--red);font-size:11.5px;padding:2px 10px;border-radius:999px;cursor:pointer;margin-left:6px;font-weight:700;}
 .confirm-dup:hover{background:var(--red-l);}
 .undo-confirm-dup{background:none;border:none;color:var(--ink-3);font-size:11.5px;padding:3px 6px;cursor:pointer;margin-left:6px;text-decoration:underline;}
@@ -1390,6 +1400,8 @@ function renderCheckTable(){
     sorted = filtered.slice().sort((x,y)=> keyOrderDesc ? (y.i - x.i) : (x.i - y.i));
   }
 
+  // เลื่อนลำดับได้เฉพาะตอนแสดงตามลำดับคีย์จริง (ไม่ได้เรียงตามคอลัมน์ และไม่ได้กรอง) ไม่งั้นตำแหน่งที่เห็นไม่ตรงกับลำดับจริง
+  const canReorder = !sortState.col && !anyFilter;
   document.getElementById('row-count').textContent = checkRows.length
     ? (anyFilter ? `แสดง ${filtered.length} จาก ${checkRows.length} รายการ` : `${checkRows.length} รายการ`)
     : '';
@@ -1426,8 +1438,8 @@ function renderCheckTable(){
     const cumCell = row.cum || (r.status==='สะสมเพิ่มเติม' && r.amount ? fmt(r.amount) : '');
     // ไฮไลต์แถวสีแดงทั้งแถวเมื่อผลผิดปกติ (ดูรายการใน ISSUE_STATUSES)
     const rowClass = isIssueStatus(r.status) ? ' class="row-issue"' : '';
-    html += `<tr${rowClass}>
-      <td class="num">${row.seq||''}</td>
+    html += `<tr${rowClass} data-i="${i}">
+      <td class="num">${canReorder ? `<span class="drag-h" data-i="${i}" title="ลากเพื่อเรียงลำดับ">⠿</span><span class="seq-jump" data-i="${i}" title="คลิกเพื่อย้ายไปลำดับที่ต้องการ">${row.seq||i+1}</span>` : (row.seq||'')}</td>
       <td>${row.code||''}</td>
       <td>${row.period||''}</td>
       <td class="num">${row.amount? fmt(parseFloat(row.amount)||0):''}</td>
@@ -1435,11 +1447,70 @@ function renderCheckTable(){
       <td class="num">${cumCell}</td>
       <td class="num">${row.slip||''}</td>
       <td>${statusCell}</td>
-      <td><button class="del" data-i="${i}" title="ลบรายการ">&times;</button></td>
+      <td style="white-space:nowrap;">${canReorder ? `<button class="mv" data-i="${i}" data-dir="up" title="เลื่อนขึ้น" ${(keyOrderDesc ? i>=checkRows.length-1 : i<=0)?'disabled':''}>▲</button><button class="mv" data-i="${i}" data-dir="down" title="เลื่อนลง" ${(keyOrderDesc ? i<=0 : i>=checkRows.length-1)?'disabled':''}>▼</button>` : ''}<button class="del" data-i="${i}" title="ลบรายการ">&times;</button></td>
     </tr>`;
   });
   html += '</tbody></table>';
   el.innerHTML = html;
+  el.querySelectorAll('.drag-h').forEach(hd=>{
+    hd.addEventListener('pointerdown', e=>{
+      e.preventDefault();
+      const from = parseInt(hd.dataset.i);
+      const srcTr = hd.closest('tr');
+      srcTr.classList.add('dragging');
+      hd.setPointerCapture(e.pointerId);
+      let b = null; // ตำแหน่งแทรก: "ก่อนแถว index b" (0..n) ใน checkRows
+      const clear = ()=> el.querySelectorAll('tr.drop-before,tr.drop-after').forEach(r=>r.classList.remove('drop-before','drop-after'));
+      const onMove = ev=>{
+        if(ev.clientY < 70) window.scrollBy(0,-14);
+        else if(ev.clientY > window.innerHeight-70) window.scrollBy(0,14);
+        clear(); b = null;
+        const t = document.elementFromPoint(ev.clientX, ev.clientY);
+        const r = t && t.closest ? t.closest('#check-table tbody tr') : null;
+        if(!r) return;
+        const rect = r.getBoundingClientRect();
+        const visualAfter = ev.clientY > rect.top + rect.height/2;
+        const target = parseInt(r.dataset.i);
+        // จอแสดงใหม่สุดก่อน = index กลับด้าน: "ก่อน" บนจอคือ index ถัดไป
+        b = (visualAfter === keyOrderDesc) ? target : target + 1;
+        r.classList.add(visualAfter ? 'drop-after' : 'drop-before');
+      };
+      const finish = commit=>{
+        hd.removeEventListener('pointermove', onMove);
+        hd.removeEventListener('pointerup', onUp);
+        hd.removeEventListener('pointercancel', onCancel);
+        clear(); srcTr.classList.remove('dragging');
+        if(commit && b !== null){
+          const to = b > from ? b-1 : b;
+          if(to !== from) moveCheckRow_(from, to);
+        }
+      };
+      const onUp = ()=> finish(true);
+      const onCancel = ()=> finish(false);
+      hd.addEventListener('pointermove', onMove);
+      hd.addEventListener('pointerup', onUp);
+      hd.addEventListener('pointercancel', onCancel);
+    });
+  });
+  el.querySelectorAll('.mv').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.i);
+      // ▲ = ขึ้นไปบนจอ: ถ้าแสดงใหม่สุดก่อน แถวบนจอคือ index ที่มากกว่า
+      const step = (btn.dataset.dir==='up') === keyOrderDesc ? 1 : -1;
+      moveCheckRow_(i, i + step);
+    });
+  });
+  el.querySelectorAll('.seq-jump').forEach(sp=>{
+    sp.addEventListener('click', ()=>{
+      const i = parseInt(sp.dataset.i);
+      const n = checkRows.length;
+      const input = prompt(`ย้ายรายการนี้ (ตอนนี้ลำดับที่ ${i+1}) ไปลำดับที่เท่าไร? (1-${n})`, String(i+1));
+      if(input===null) return;
+      const pos = parseInt(input, 10);
+      if(isNaN(pos) || pos<1 || pos>n){ alert(`กรอกเลข 1-${n}`); return; }
+      moveCheckRow_(i, pos-1);
+    });
+  });
   el.querySelectorAll('.del').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       checkRows.splice(parseInt(btn.dataset.i),1);
@@ -1461,6 +1532,17 @@ function renderCheckTable(){
       saveRows(); renderCheckTable(); renderDashboard();
     });
   });
+}
+
+// ย้ายรายการจากตำแหน่ง from ไป to (index ใน checkRows) แล้วเรียงเลขลำดับใหม่ 1..N ให้ตรงกับลำดับจริง
+// ผลตรวจของทุกแถวคำนวณใหม่ตามลำดับใหม่ (การเช็คงวด/ซ้ำดูจากแถวที่อยู่ก่อนหน้า)
+function moveCheckRow_(from, to){
+  if(from===to || to<0 || to>=checkRows.length) return;
+  const [item] = checkRows.splice(from, 1);
+  checkRows.splice(to, 0, item);
+  checkRows.forEach((row,idx)=>{ row.seq = idx+1; });
+  logActivity('เลื่อนลำดับรายการ', `รหัส ${item.code} จากลำดับ ${from+1} ไปลำดับ ${to+1}`);
+  saveRows(); renderCheckTable(); renderDashboard();
 }
 
 function addRow(){
