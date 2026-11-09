@@ -297,6 +297,17 @@ tr.drop-after td{box-shadow:inset 0 -3px 0 var(--yellow-d)!important;}
   </nav>
 
   <section class="panel active" id="panel-check">
+    <div class="card accent-teal" id="fix-requests-card" style="display:none;">
+      <div class="toolbar">
+        <h2 style="margin:0;">แจ้งแก้ไขจากระบบปิดยอด <span class="pill p-red" id="fix-requests-count" style="margin-left:6px;"></span></h2>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <label style="margin:0;display:flex;align-items:center;gap:5px;font-size:12px;"><input type="checkbox" id="fix-show-done" style="width:auto;"> แสดงที่แก้แล้ว</label>
+          <button class="ghost" id="btn-refresh-fix-requests">↻ โหลดใหม่</button>
+        </div>
+      </div>
+      <p class="hint" style="margin:0 0 10px;">รายการที่พนักงานแจ้งแก้ไขไว้ในระบบปิดยอด (14 วันล่าสุด) เช่น รหัสลูกค้า งวดที่ จำนวนเงินที่คีย์ผิด เลขบรรทัดแสดงตามที่พนักงานกรอก ตรวจกับ Working Reference ด้วยตา แก้เสร็จแล้วกด "แก้แล้ว"</p>
+      <div id="fix-requests-result"></div>
+    </div>
     <div class="card" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <div style="display:flex;align-items:center;gap:8px;">
         <label style="margin:0;white-space:nowrap;">วันที่ทำรายการ</label>
@@ -508,6 +519,14 @@ tr.drop-after td{box-shadow:inset 0 -3px 0 var(--yellow-d)!important;}
         </div>
         <p class="hint" style="margin:0 0 10px;">เทียบรหัสลูกค้าทั้งหมดใน Working Reference กับข้อมูลสัญญาที่เคยบันทึกไว้ — รหัสไหนมีประวัติผ่อนจริงแต่ยังไม่เคยบันทึกข้อมูลสัญญาเลย จะขึ้นในรายการนี้ (เรียงจากลูกค้าที่มีประวัติเยอะสุดก่อน)</p>
         <div id="missing-contracts-result"></div>
+      </div>
+      <div class="card accent-teal">
+        <div class="toolbar">
+          <h2 style="margin:0;">ดึงสัญญาจากรายการขายในระบบปิดยอด</h2>
+          <button class="ghost" id="btn-pull-sales-contracts">↻ ดึงข้อมูล (90 วันล่าสุด)</button>
+        </div>
+        <p class="hint" style="margin:0 0 10px;">อ่านรายการขายผ่อน (รหัส + ค่างวด + จำนวนงวด) ที่พนักงานบันทึกไว้ในระบบปิดยอด แล้วเลือกรายการเพื่อส่งไปช่องเทียบด้านล่าง ยังไม่บันทึกจนกว่าจะกดบันทึกในขั้นตอนเทียบ ตรวจค่าที่คีย์ด้วยตาเสมอ เพราะลูกค้าใหม่ยังไม่มีประวัติให้เทียบ</p>
+        <div id="sales-contracts-result"></div>
       </div>
       <div class="card accent-purple">
         <h2><span class="card-icon purple">📄</span>เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ)</h2>
@@ -2271,9 +2290,11 @@ function renderMissingContracts(){
     return;
   }
   let html = `<p class="note" style="margin:0 0 10px;">พบ ${missing.length.toLocaleString()} รหัสที่ยังไม่มีข้อมูลสัญญา</p>
-    <div class="scroll" style="max-height:320px;"><table><thead><tr><th>รหัสลูกค้า</th><th class="num">จำนวนแถวประวัติใน WR</th><th></th></tr></thead><tbody>`;
+    <div class="scroll" style="max-height:320px;"><table><thead><tr><th>รหัสลูกค้า</th><th class="num">จำนวนแถวประวัติใน WR</th><th>พบในระบบปิดยอด</th><th></th></tr></thead><tbody>`;
   missing.forEach(([code, count])=>{
-    html += `<tr><td>${code}</td><td class="num">${count}</td><td><button class="ghost btn-fill-contract-code" data-code="${code}">➕ กรอกสัญญา</button></td></tr>`;
+    const hint = salesHintFor_(code);
+    const hintCell = hint ? `${hint.months} งวด × ${fmt(hint.inst)}` : '<span class="note">-</span>';
+    html += `<tr><td>${code}</td><td class="num">${count}</td><td>${hintCell}</td><td><button class="ghost btn-fill-contract-code" data-code="${code}">➕ กรอกสัญญา</button></td></tr>`;
   });
   html += '</tbody></table></div>';
   resultEl.innerHTML = html;
@@ -2284,11 +2305,166 @@ function renderMissingContracts(){
       const ta = document.getElementById('contract-paste');
       // เติมรหัสลงช่องวางข้อมูลสัญญาให้เลย (เว้นช่องจำนวนงวด/ยอดไว้ให้กรอกเอง) ต่อท้ายบรรทัดเดิมถ้ามี
       const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
-      ta.value += `${prefix}${code}\t\t`;
+      const hint = salesHintFor_(code);
+      ta.value += hint ? `${prefix}${code}\t${hint.months}\t${hint.inst}` : `${prefix}${code}\t\t`;
       ta.focus();
     });
   });
 }
+
+/* ===================== แจ้งแก้ไขจากระบบปิดยอด ===================== */
+async function loadFixRequests(){
+  const card = document.getElementById('fix-requests-card');
+  const el = document.getElementById('fix-requests-result');
+  const showDone = document.getElementById('fix-show-done').checked;
+  const branchAtStart = currentBranch;
+  try{
+    const data = await apiGet('getFixRequests', {includeDone: showDone ? '1' : ''});
+    if(branchAtStart !== currentBranch) return; // สลับสาขาระหว่างรอ
+    renderFixRequests(data, showDone);
+  }catch(e){
+    console.warn('โหลดรายการแก้ไขจากระบบปิดยอดไม่สำเร็จ:', e.message);
+  }
+}
+
+function renderFixRequests(data, showDone){
+  const card = document.getElementById('fix-requests-card');
+  const el = document.getElementById('fix-requests-result');
+  const countEl = document.getElementById('fix-requests-count');
+  if(data.problem){
+    card.style.display = '';
+    countEl.style.display = 'none';
+    el.innerHTML = `<p class="note">ดึงรายการแก้ไขจากระบบปิดยอดไม่ได้: ${escHtml_(data.problem)}</p>`;
+    return;
+  }
+  const items = data.items || [];
+  const pending = items.filter(it=>!it.done);
+  // ซ่อนการ์ดทั้งใบเมื่อไม่มีอะไรค้าง (ยกเว้นกำลังเปิดดูที่แก้แล้ว)
+  if(items.length===0 && !showDone){ card.style.display = 'none'; return; }
+  card.style.display = '';
+  countEl.style.display = pending.length ? '' : 'none';
+  countEl.textContent = pending.length ? `ค้าง ${pending.length}` : '';
+  if(items.length===0){ el.innerHTML = '<div class="empty">ไม่มีรายการแก้ไขใน 14 วันล่าสุด</div>'; return; }
+  let html = `<div class="scroll" style="max-height:320px;"><table><thead><tr>
+    <th>วันที่แจ้ง</th><th>บรรทัดที่</th><th>ใส่อะไรผิด</th><th>จาก</th><th>ต้องเป็น</th><th></th>
+  </tr></thead><tbody>`;
+  items.forEach(it=>{
+    const lines = (it.lines||[]).map(escHtml_).join(', ') || '-';
+    const action = it.done
+      ? `<span class="pill p-green">แก้แล้ว</span><div class="note">${escHtml_(it.doneBy||'')}${it.doneAt ? ' · '+new Date(it.doneAt).toLocaleString('th-TH',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}) : ''}</div>`
+      : `<button class="ghost btn-fix-done" data-id="${escHtml_(it.id)}">แก้แล้ว</button>`;
+    html += `<tr${it.done?' style="opacity:.6;"':''}>
+      <td>${fmtDateKey_(it.dateKey)}</td>
+      <td>${lines}</td>
+      <td>${escHtml_(it.field||'-')}</td>
+      <td>${escHtml_(it.from||'-')}</td>
+      <td>${escHtml_(it.to||'-')}</td>
+      <td style="white-space:nowrap;">${action}</td>
+    </tr>`;
+  });
+  html += '</tbody></table></div>';
+  el.innerHTML = html;
+  el.querySelectorAll('.btn-fix-done').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+      try{
+        await apiGet('markFixDone', {id: btn.dataset.id});
+        logActivity('กดแก้แล้ว (รายการแก้ไขจากระบบปิดยอด)', btn.dataset.id);
+      }catch(e){
+        alert('บันทึกไม่สำเร็จ: ' + e.message);
+      }
+      loadFixRequests();
+    });
+  });
+}
+document.getElementById('btn-refresh-fix-requests').addEventListener('click', loadFixRequests);
+document.getElementById('fix-show-done').addEventListener('change', loadFixRequests);
+
+/* ===================== ดึงสัญญาจากรายการขายในระบบปิดยอด ===================== */
+let SALES_HINTS = {};          // รหัส (ตัดศูนย์นำหน้า) -> {months, inst} เฉพาะรหัสที่ยังไม่มีสัญญา
+let SALES_HINTS_BRANCH = '';   // สาขาที่ hints ชุดนี้เป็นของ
+let salesLoadedFor_ = '';      // สาขาที่โหลดอัตโนมัติไปแล้ว
+let pulledSales_ = [];
+const normCodeJs_ = c => String(c==null?'':c).trim().replace(/^0+(?=\d)/,'');
+function salesHintFor_(code){
+  return SALES_HINTS_BRANCH===currentBranch ? (SALES_HINTS[normCodeJs_(code)] || null) : null;
+}
+
+async function loadSalesContracts(){
+  const el = document.getElementById('sales-contracts-result');
+  el.innerHTML = '<div class="empty">กำลังโหลด...</div>';
+  const branchAtStart = currentBranch;
+  try{
+    const data = await apiGet('getSalesContracts', {days: 90});
+    if(branchAtStart !== currentBranch) return; // สลับสาขาระหว่างรอ
+    salesLoadedFor_ = branchAtStart;
+    renderSalesContracts(data);
+    if(!data.problem){
+      SALES_HINTS = {}; SALES_HINTS_BRANCH = branchAtStart;
+      (data.items||[]).filter(it=>it.status==='new').forEach(it=>{ SALES_HINTS[normCodeJs_(it.code)] = {months: it.months, inst: it.inst}; });
+      renderMissingContracts();
+    }
+  }catch(e){
+    el.innerHTML = `<div class="empty">โหลดไม่สำเร็จ: ${escHtml_(e.message)}</div>`;
+  }
+}
+
+function renderSalesContracts(data){
+  const el = document.getElementById('sales-contracts-result');
+  if(data.problem){
+    el.innerHTML = `<div class="banner bad"><div class="icon">!</div><div><div class="title">อ่านข้อมูลจากระบบปิดยอดไม่ได้</div><div class="sub">${escHtml_(data.problem)}</div></div></div>`;
+    return;
+  }
+  pulledSales_ = data.items || [];
+  const skipNote = [];
+  if(data.sameCount) skipNote.push(`ตรงกับสัญญาเดิมแล้ว ${data.sameCount} รหัส`);
+  if(data.returnedSkipped) skipNote.push(`ข้าม ${data.returnedSkipped} รหัสที่คืนเครื่องแล้ว`);
+  const extra = skipNote.length ? `<p class="note" style="margin:0 0 10px;">${skipNote.join(' · ')}</p>` : '';
+  if(pulledSales_.length===0){
+    el.innerHTML = extra + '<div class="empty">ไม่มีรายการขายใหม่ที่ต้องนำเข้าสัญญาในช่วง 90 วันล่าสุด</div>';
+    return;
+  }
+  let html = extra + `<p class="note" style="margin:0 0 10px;">พบ ${pulledSales_.length} รหัส (ติ๊กไว้ล่วงหน้าเฉพาะรหัสที่ยังไม่มีสัญญาและไม่มีข้อสังเกต)</p>
+    <div class="scroll" style="max-height:340px;"><table><thead><tr>
+      <th></th><th>รหัส</th><th class="num">จำนวนงวด</th><th class="num">ค่างวด</th><th>วันที่ขาย</th><th>รุ่น</th><th>สถานะ / หมายเหตุ</th>
+    </tr></thead><tbody>`;
+  pulledSales_.forEach((it,i)=>{
+    const notes = [];
+    if(it.status==='diff') notes.push(`<span class="pill p-amber">มีสัญญาเดิม</span> <span class="note">เดิม ${it.existingMonths} งวด / ${fmt(it.existingInst)} บาท — บันทึกใหม่จะเขียนทับ</span>`);
+    else notes.push('<span class="pill p-green">ยังไม่มีสัญญา</span>');
+    if(it.multiple) notes.push('<div class="note" style="color:var(--amber);">พบหลายรายการขายของรหัสนี้ค่าต่างกัน ใช้รายการล่าสุด ตรวจด้วยตา</div>');
+    if(!it.inWR) notes.push('<div class="note">ยังไม่มีประวัติใน Working Reference</div>');
+    const checked = (it.status==='new' && !it.multiple) ? ' checked' : '';
+    html += `<tr>
+      <td><input type="checkbox" class="sc-pick" data-i="${i}"${checked} style="width:auto;"></td>
+      <td>${escHtml_(it.code)}</td>
+      <td class="num">${it.months}</td>
+      <td class="num">${fmt(it.inst)}</td>
+      <td>${fmtDateKey_(it.saleDateKey)}</td>
+      <td>${escHtml_(it.model)}</td>
+      <td>${notes.join('')}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>
+    <div style="margin-top:12px;"><button class="primary" id="btn-fill-sales-contracts">เพิ่มรายการที่เลือกลงช่องเทียบด้านล่าง</button></div>`;
+  el.innerHTML = html;
+  document.getElementById('btn-fill-sales-contracts').addEventListener('click', fillContractsFromSales);
+}
+
+function fillContractsFromSales(){
+  const picked = Array.from(document.querySelectorAll('#sales-contracts-result .sc-pick:checked')).map(cb=>pulledSales_[+cb.dataset.i]).filter(Boolean);
+  if(!picked.length){ alert('ยังไม่ได้เลือกรายการ'); return; }
+  const ta = document.getElementById('contract-paste');
+  const have = new Set(ta.value.split('\n').map(l=>l.split(/[\t,\s]/)[0].trim()).filter(Boolean).map(normCodeJs_));
+  const add = picked.filter(p=>!have.has(normCodeJs_(p.code)));
+  if(add.length){
+    const prefix = ta.value && !ta.value.endsWith('\n') ? '\n' : '';
+    ta.value += prefix + add.map(p=>`${p.code}\t${p.months}\t${p.inst}`).join('\n');
+  }
+  runContractCompare(); // ใช้ขั้นตอนเทียบ/ตัดสินใจ/บันทึกเดิมทั้งหมด
+  document.getElementById('contract-compare-result').scrollIntoView({behavior:'smooth', block:'start'});
+}
+document.getElementById('btn-pull-sales-contracts').addEventListener('click', loadSalesContracts);
 
 /* ===================== เทียบ/บันทึกข้อมูลสัญญา (จำนวนงวด + ผ่อนเดือนละ) ===================== */
 // วางข้อมูล 3 ช่อง (รหัสลูกค้า, จำนวนงวดทั้งสัญญา, ผ่อนเดือนละ) แล้วเทียบกับประวัติจริงใน
@@ -2518,6 +2694,7 @@ document.querySelectorAll('.wr-subtabs button').forEach(btn=>{
     btn.classList.add('active');
     document.getElementById('wr-sub-'+btn.dataset.wrsub).classList.add('active');
     if(btn.dataset.wrsub==='return') loadPendingReturns();
+    if(btn.dataset.wrsub==='contracts' && salesLoadedFor_!==currentBranch) loadSalesContracts();
   });
 });
 
@@ -2646,6 +2823,7 @@ async function init(){
   populateBackfillDateSelects();
   document.getElementById('check-table').innerHTML = '<div class="empty">กำลังเชื่อมต่อ Google Sheet…</div>';
   setConnStatus('connecting');
+  document.getElementById('fix-requests-card').style.display = 'none';
   try{
     // ยิงทีละคำขอ ไม่ยิงพร้อมกัน — เคยลองยิงพร้อมกันทั้ง 4 ตัวเพื่อความเร็ว แต่พบว่า Apps Script
     // กั้นคำขอ (rate limit) เมื่อถูกยิงถี่เกินไปในเวลาสั้นๆ ทำให้ "เชื่อมต่อไม่สำเร็จ" เป็นประจำ
@@ -2670,6 +2848,7 @@ async function init(){
   }
   renderCheckTable();
   renderDashboard();
+  loadFixRequests(); // ไม่รอผล ไม่ให้ช้าตอนเปิดเว็บ
 }
 
 /* ===================== ระบบล็อกอิน / สมัครสมาชิก / บันทึกกิจกรรม ===================== */
